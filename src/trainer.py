@@ -4,6 +4,8 @@ import sklearn
 from sklearn.datasets import load_wine, load_iris, load_digits, load_breast_cancer
 from sklearn.model_selection import train_test_split
 
+from sklearn.metrics import balanced_accuracy_score, accuracy_score
+
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, TensorDataset
@@ -107,8 +109,8 @@ def main(args):
 
     load_data = SUPPORTED_DATASETS[args.dataset]
     data = load_data()
-    X_train, X_test, y_train, y_test = train_test_split(data.data, data.target, test_size=0.2, random_state=seed)
-    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.15, random_state=seed)  # 0.25 x 0.8 = 0.2
+    X_train, X_test, y_train, y_test = train_test_split(data.data, data.target, test_size=0.2, random_state=seed, stratify=data.target)  # Stratify to maintain class distribution in train and test sets
+    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.15, random_state=seed, stratify=y_train)  # 0.25 x 0.8 = 0.2
 
     print("Empezando entrenamiento del modelo completo para clasificación total...")
     time_inicio = time.time()
@@ -151,8 +153,8 @@ def main(args):
         binary_model.to(device)
         train(binary_model, binary_train_loader, binary_val_loader, nn.BCEWithLogitsLoss(), optim.Adam(binary_model.parameters(), lr=0.001), device, epochs=50)
         binary_models.append(binary_model)
-    timepo_fin = time.time()
-    tiempo_entrenamiendo_binarios = timepo_fin - tiempo_inicio
+    tiempo_fin = time.time()
+    tiempo_entrenamiendo_binarios = tiempo_fin - tiempo_inicio
     print(f"\nTiempo total de entrenamiento de modelos binarios: {tiempo_entrenamiendo_binarios:.4f} segundos", flush=True)
 
     ### Test the full classification model
@@ -164,6 +166,9 @@ def main(args):
     
     test_loss = 0
     acc_test = 0
+    acc_weighted_test = 0
+    all_preds = []
+    all_labels = []
     with torch.no_grad():
         for batch in test_loader:
             inputs, targets = batch
@@ -171,10 +176,14 @@ def main(args):
             outputs = model(inputs)
             loss = nn.CrossEntropyLoss()(outputs, targets)
             test_loss += loss.item()
-            acc_test += (outputs.argmax(dim=1) == targets).sum().item()
+            all_preds.extend(outputs.argmax(dim=1).cpu().numpy())
+            all_labels.extend(targets.cpu().numpy())
 
+    acc_weighted_test = balanced_accuracy_score(all_labels, all_preds)
+    acc_test = accuracy_score(all_labels, all_preds)
     print(f"\nTest Loss for full classification model: {test_loss / len(test_loader):.4f}", flush=True)
-    print(f"Test Accuracy for full classification model: {acc_test / len(test_loader.dataset):.4f}", flush=True)
+    print(f"Test Accuracy for full classification model: {acc_test:.4f}", flush=True)
+    print(f"Test Weighted Accuracy for full classification model: {acc_weighted_test:.4f}", flush=True)
 
     ### Test the binary classification models
     for class_idx, binary_model in enumerate(binary_models):
@@ -200,6 +209,12 @@ def main(args):
 
     ### Test the ensemble of binary classification models
     ensemble_acc_test = 0
+    ensemble_outputs_all = []
+    ensemble_labels_all = []
+    
+    print("\n=== DEBUGGING ENSEMBLE PREDICTIONS ===")
+    sample_count = 0
+    
     with torch.no_grad():
         for batch in test_loader:
             inputs, targets = batch
@@ -209,10 +224,55 @@ def main(args):
                 binary_output = torch.sigmoid(binary_model(inputs).squeeze())
                 binary_outputs.append(binary_output)
             ensemble_outputs = torch.stack(binary_outputs, dim=1)
-            predicted_classes = ensemble_outputs.argmax(dim=1)
-            ensemble_acc_test += (predicted_classes == targets).sum().item()
+            
+            # Ensemble strategy: threshold-based voting with fallback
+            threshold = 0.5
+            batch_predictions = []
+            
+            for sample_idx in range(ensemble_outputs.shape[0]):
+                sample_probs = ensemble_outputs[sample_idx]  # Probabilidades para esta muestra
+                true_label = targets[sample_idx].item()
+                
+                # Debug: imprimir las primeras 5 muestras
+                if sample_count < 5:
+                    print(f"\nSample {sample_count + 1} (True label: {true_label} - {data.target_names[true_label]}):")
+                    for i, prob in enumerate(sample_probs):
+                        print(f"  Model {i} ({data.target_names[i]}): {prob:.4f}")
+                
+                # Ver qué modelos superan el threshold
+                above_threshold = sample_probs > threshold
+                
+                if above_threshold.sum() == 1:
+                    # Solo un modelo supera threshold -> esa clase
+                    predicted_class = above_threshold.nonzero(as_tuple=True)[0].item()
+                    strategy = "single_confident"
+                elif above_threshold.sum() > 1:
+                    # Varios superan threshold -> el de mayor probabilidad entre los que superan
+                    candidates = sample_probs * above_threshold.float()
+                    predicted_class = candidates.argmax().item()
+                    strategy = "multiple_confident"
+                else:
+                    # Ninguno supera threshold -> el de mayor probabilidad (fallback)
+                    predicted_class = sample_probs.argmax().item()
+                    strategy = "fallback"
+                
+                if sample_count < 5:
+                    print(f"  Strategy: {strategy}")
+                    print(f"  Predicted: {predicted_class} ({data.target_names[predicted_class]})")
+                    print(f"  Correct: {'✅' if predicted_class == true_label else '❌'}")
+                
+                batch_predictions.append(predicted_class)
+                sample_count += 1
+            
+            ensemble_outputs_all.extend(batch_predictions)
+            ensemble_labels_all.extend(targets.cpu().numpy())
+    
+    print("=====================================\n")
 
-    print(f"Ensemble Test Accuracy: {ensemble_acc_test / len(test_loader.dataset):.4f}", flush=True)
+    ensemble_acc_weighted_test = balanced_accuracy_score(ensemble_labels_all, ensemble_outputs_all)
+    ensemble_acc_test = accuracy_score(ensemble_labels_all, ensemble_outputs_all)
+    print(f"Ensemble Test Accuracy: {ensemble_acc_test:.4f}", flush=True)
+    print(f"Ensemble Test Weighted Accuracy: {ensemble_acc_weighted_test:.4f}", flush=True)
 
     df = pd.DataFrame({
         "Dataset": args.dataset,
@@ -223,8 +283,10 @@ def main(args):
         "batch_size": args.batch_size,
         "Full Model Train Time (s)": tiempo_entrenamiendo_completo,
         "Binary Models Train Time (s)": tiempo_entrenamiendo_binarios,
-        "Full Model Test Accuracy": acc_test / len(test_loader.dataset),
-        "Ensemble Test Accuracy": ensemble_acc_test / len(test_loader.dataset)
+        "Full Model Test Accuracy": acc_test,
+        "Full Model Test Weighted Accuracy": acc_weighted_test,
+        "Ensemble Test Accuracy": ensemble_acc_test,
+        "Ensemble Test Weighted Accuracy": ensemble_acc_weighted_test
     }, index=[0])
 
     df.to_csv("training_results.csv", index=False, mode="a", header=not pd.io.common.file_exists("training_results.csv"))
