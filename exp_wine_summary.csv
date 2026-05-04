@@ -1,0 +1,4 @@
+task,dataset,dependency_strength,target_dim,hidden_layers,batch_normalization,batch_size,epochs,learning_rate,model_type,coupling_level,accuracy,balanced_accuracy,precision_macro,recall_macro,f1_macro,tpr_macro,fpr_macro,tnr_macro,fnr_macro,train_time_seconds,seed
+classification,wine,,3,"[32, 16]",False,32,50,0.001,OVA,decoupled_outputs,0.9907407407407408,0.9920634920634921,0.98989898989899,0.9920634920634921,0.9905937683715461,0.9920634920634921,0.004273504273504274,0.9957264957264957,0.007936507936507936,1.192399501800537,mean
+classification,wine,,3,"[32, 16]",False,32,50,0.001,OVO,pairwise_decomposition,0.9814814814814815,0.9841269841269842,0.9813519813519814,0.9841269841269842,0.9817175417175417,0.9841269841269842,0.008903133903133903,0.9910968660968661,0.015873015873015872,0.8219184080759684,mean
+classification,wine,,3,"[32, 16]",False,32,50,0.001,multi-output,coupled_outputs,1.0,1.0,1.0,1.0,1.0,1.0,0.0,1.0,0.0,0.4774361451466878,mean

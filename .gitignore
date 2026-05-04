@@ -1,0 +1,22 @@
+# Notebooks are kept locally while the code is being cleaned for GitHub.
+*.ipynb
+.ipynb_checkpoints/
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+
+# Local datasets downloaded during experiments
+data/
+
+# Local manuscript files
+*.pdf
+*.tex
+*.aux
+*.log
+*.out
+*.toc
+
+# Legacy/local result files not referenced by the current analysis docs
+training_results*.csv
+tfm_results*.csv
