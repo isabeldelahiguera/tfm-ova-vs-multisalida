@@ -45,30 +45,14 @@ def load_mnist(max_train: int | None = None, max_test: int | None = None):
 
 
 def load_cifar10(max_train: int | None = None, max_test: int | None = None):
-    try:
-        X, y = fetch_openml(data_id=40927, as_frame=False, return_X_y=True, data_home="./data/openml")
-        X = np.asarray(X)
-        y = np.asarray(y)
-        if X.shape[0] < 60000:
-            raise RuntimeError(f"Expected 60000 CIFAR-10 samples from OpenML, got {X.shape[0]}.")
-        try:
-            y = y.astype(int)
-        except (TypeError, ValueError):
-            y = pd.Categorical(y).codes
+    from torchvision.datasets import CIFAR10
 
-        X_train = X[:50000]
-        y_train = y[:50000]
-        X_test = X[50000:60000]
-        y_test = y[50000:60000]
-    except Exception:
-        from torchvision.datasets import CIFAR10
-
-        train_dataset = CIFAR10(root="./data", train=True, download=True)
-        test_dataset = CIFAR10(root="./data", train=False, download=True)
-        X_train = train_dataset.data.reshape(-1, 32 * 32 * 3)
-        y_train = np.array(train_dataset.targets)
-        X_test = test_dataset.data.reshape(-1, 32 * 32 * 3)
-        y_test = np.array(test_dataset.targets)
+    train_dataset = CIFAR10(root="./data", train=True, download=True)
+    test_dataset = CIFAR10(root="./data", train=False, download=True)
+    X_train = train_dataset.data.reshape(-1, 32 * 32 * 3)
+    y_train = np.array(train_dataset.targets)
+    X_test = test_dataset.data.reshape(-1, 32 * 32 * 3)
+    y_test = np.array(test_dataset.targets)
 
     X_train = X_train.astype(np.float32) / 255.0
     X_test = X_test.astype(np.float32) / 255.0

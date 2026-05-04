@@ -11,6 +11,7 @@ entornotfm/
 .venv/
 venv/
 env/
+conda_env/
 
 # Local datasets downloaded during experiments
 data/
@@ -27,6 +28,7 @@ data/
 # Legacy/local files
 training_results*.csv
 tfm_results*.csv
+slurm_logs/
+resultados_slurm/
 README_old.md
 prueba.sh
-EOF
