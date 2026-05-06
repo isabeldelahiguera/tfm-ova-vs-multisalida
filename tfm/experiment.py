@@ -216,13 +216,14 @@ def append_shared_metadata(
     train_time: float,
     training_info: Dict[str, float],
 ) -> Dict[str, object]:
+    hidden_layers_value = str(args.hidden_layers) if args.model_arch == "mlp" else "n/a"
     return {
         "task": experiment_data.task_type,
         "dataset": experiment_data.dataset_name,
         "dependency_strength": experiment_data.dependency_strength,
         "target_dim": experiment_data.target_dim,
         "model_arch": args.model_arch,
-        "hidden_layers": str(args.hidden_layers),
+        "hidden_layers": hidden_layers_value,
         "batch_normalization": args.batch_normalization,
         "batch_size": args.batch_size,
         "epochs": args.epochs,
