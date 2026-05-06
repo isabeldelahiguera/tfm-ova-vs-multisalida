@@ -88,6 +88,25 @@ Por tanto, cuando se interpretan las gráficas globales de la notebook, se usan 
 
 ## Ejecución
 
+## Extensión BRISC
+
+Se ha añadido `brisc` como dataset médico de clasificación para probar la hipótesis del TFM en imágenes MRI cerebrales. La comparación sigue siendo la misma que en el resto de experimentos de clasificación: una CNN `multi-output` con 4 salidas frente a 4 CNNs binarias independientes en esquema `OVA`.
+
+El loader espera el dataset descargado localmente en:
+
+```text
+data/brisc2025/train/
+data/brisc2025/test/
+```
+
+Cada partición debe contener las carpetas de clase `glioma`, `meningioma`, `pituitary` y `no_tumor`. Las imágenes se cargan en escala de grises, se redimensionan con `--image-size`, se normalizan a `[0, 1]` y se pasan a la VGG compacta con forma `(N, 1, H, W)`.
+
+El script preparado para SLURM usa 3 semillas por defecto:
+
+```bash
+sbatch scripts/run_tfm_brisc_vgg_slurm.sh
+```
+
 Ejemplo de clasificación sintética:
 
 ```bash
@@ -130,11 +149,18 @@ Ejemplo con CIFAR-10 usando VGG compacta:
 python run_experiments.py --task classification --dataset cifar10 --model-arch vgg --seeds 1 --coupling-modes ova --epochs 50 --early-stopping-patience 10 --early-stopping-min-delta 1e-4 --batch-size 64 --output-csv exp_cifar10_vgg.csv --summary-csv exp_cifar10_vgg_summary.csv
 ```
 
+Ejemplo con BRISC usando VGG compacta sobre la tarea de clasificación:
+
+```bash
+python run_experiments.py --task classification --dataset brisc --brisc-root ./data/brisc2025 --image-size 128 --model-arch vgg --seeds 1 2 3 --coupling-modes ova --epochs 50 --early-stopping-patience 10 --early-stopping-min-delta 1e-4 --batch-size 32 --output-csv exp_brisc_vgg.csv --summary-csv exp_brisc_vgg_summary.csv
+```
+
 Para lanzar los experimentos VGG en SLURM, es recomendable enviar un job por dataset:
 
 ```bash
 sbatch scripts/run_tfm_mnist_vgg_slurm.sh
 sbatch scripts/run_tfm_cifar10_vgg_slurm.sh
+sbatch scripts/run_tfm_brisc_vgg_slurm.sh
 ```
 
 Así, si CIFAR-10 tarda más o falla por memoria, no arrastra el experimento de MNIST. Se pueden cambiar parámetros sin editar los ficheros, por ejemplo:
@@ -142,6 +168,13 @@ Así, si CIFAR-10 tarda más o falla por memoria, no arrastra el experimento de 
 ```bash
 SEEDS="1 2 3" EPOCHS=50 EARLY_STOPPING_PATIENCE=10 EARLY_STOPPING_MIN_DELTA=0.0001 BATCH_SIZE=128 sbatch scripts/run_tfm_mnist_vgg_slurm.sh
 SEEDS="1 2 3" EPOCHS=50 EARLY_STOPPING_PATIENCE=10 EARLY_STOPPING_MIN_DELTA=0.0001 BATCH_SIZE=128 sbatch scripts/run_tfm_cifar10_vgg_slurm.sh
+BRISC_ROOT="/ruta/a/brisc2025" IMAGE_SIZE=128 SEEDS="1 2 3" EPOCHS=50 BATCH_SIZE=32 sbatch scripts/run_tfm_brisc_vgg_slurm.sh
+```
+
+Si BRISC está en `./data/brisc2025`, como en la configuración por defecto del proyecto, basta con:
+
+```bash
+sbatch scripts/run_tfm_brisc_vgg_slurm.sh
 ```
 
 También se conserva `scripts/run_tfm_slurm.sh` como lanzador combinado si se quiere ejecutar más de un dataset dentro del mismo job.
@@ -179,6 +212,7 @@ Datasets de clasificación implementados:
 - `breast_cancer`: clasificación binaria real.
 - `mnist`: clasificación de dígitos con 10 clases, más costoso que los anteriores.
 - `cifar10`: clasificación de imágenes RGB de 10 clases, aplanadas como entrada tabular.
+- `brisc`: clasificación médica de resonancias MRI cerebrales con 4 clases. Usa `data/brisc2025/train` y `data/brisc2025/test`.
 - `dermatology`: clasificación dermatológica de UCI con 6 clases.
 - `heart_disease`: clasificación clínica de UCI con 5 clases en la variable objetivo `num`.
 

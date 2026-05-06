@@ -397,8 +397,11 @@ def validate_args(args) -> None:
     if args.dataset not in valid_datasets:
         raise ValueError(f"Dataset '{args.dataset}' is not valid for task '{args.task}'")
 
-    if args.model_arch == "vgg" and (args.task != "classification" or args.dataset not in {"mnist", "cifar10"}):
-        raise ValueError("model_arch='vgg' is only supported for classification with mnist or cifar10")
+    if args.model_arch == "vgg" and (args.task != "classification" or args.dataset not in {"mnist", "cifar10", "brisc"}):
+        raise ValueError("model_arch='vgg' is only supported for classification with mnist, cifar10 or brisc")
+
+    if args.image_size <= 0:
+        raise ValueError("image_size must be greater than 0")
 
     if args.early_stopping_patience < 0:
         raise ValueError("early_stopping_patience must be greater than or equal to 0")

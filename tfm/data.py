@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 from sklearn.datasets import fetch_openml, load_breast_cancer, load_digits, load_iris, load_linnerud, load_wine
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
@@ -99,6 +101,77 @@ def load_cifar10(max_train: int | None = None, max_test: int | None = None, flat
     return X_train, X_test, y_train, y_test
 
 
+def load_brisc_split(
+    split_dir: Path,
+    class_names: List[str],
+    image_size: int,
+    max_samples: int | None,
+    flatten: bool,
+):
+    images = []
+    labels = []
+    per_class_limit = None
+    extra_samples = 0
+    if max_samples is not None:
+        per_class_limit, extra_samples = divmod(max_samples, len(class_names))
+
+    for class_idx, class_name in enumerate(class_names):
+        class_dir = split_dir / class_name
+        if not class_dir.exists():
+            raise FileNotFoundError(f"Expected BRISC class directory not found: {class_dir}")
+        image_paths = sorted(
+            path for path in class_dir.iterdir() if path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        )
+        if per_class_limit is not None:
+            class_limit = per_class_limit + int(class_idx < extra_samples)
+            image_paths = image_paths[:class_limit]
+        for image_path in image_paths:
+            with Image.open(image_path) as image:
+                image = image.convert("L").resize((image_size, image_size), Image.BILINEAR)
+                array = np.asarray(image, dtype=np.float32) / 255.0
+            images.append(array)
+            labels.append(class_idx)
+
+    X = np.stack(images, axis=0)
+    y = np.asarray(labels, dtype=np.int64)
+    if flatten:
+        X = X.reshape(X.shape[0], image_size * image_size)
+    else:
+        X = X[:, None, :, :]
+
+    return X, y
+
+
+def load_brisc(
+    brisc_root: str | Path = "./data/brisc2025",
+    image_size: int = 128,
+    max_train: int | None = None,
+    max_test: int | None = None,
+    flatten: bool = True,
+):
+    root = Path(brisc_root).expanduser()
+    class_names = ["glioma", "meningioma", "pituitary", "no_tumor"]
+
+    if not (root / "train").exists() or not (root / "test").exists():
+        raise FileNotFoundError(f"Expected BRISC train/test directories under: {root}")
+
+    X_train, y_train = load_brisc_split(
+        root / "train",
+        class_names,
+        image_size,
+        max_train,
+        flatten,
+    )
+    X_test, y_test = load_brisc_split(
+        root / "test",
+        class_names,
+        image_size,
+        max_test,
+        flatten,
+    )
+    return X_train, X_test, y_train, y_test, class_names
+
+
 def load_dermatology():
     from ucimlrepo import fetch_ucirepo
 
@@ -142,6 +215,7 @@ def load_energy():
 
 STANDARD_CLASSIFICATION_DATASETS["mnist"] = load_mnist
 STANDARD_CLASSIFICATION_DATASETS["cifar10"] = load_cifar10
+STANDARD_CLASSIFICATION_DATASETS["brisc"] = load_brisc
 STANDARD_CLASSIFICATION_DATASETS["dermatology"] = load_dermatology
 STANDARD_CLASSIFICATION_DATASETS["heart_disease"] = load_heart_disease
 STANDARD_REGRESSION_DATASETS["energy"] = load_energy
@@ -233,14 +307,24 @@ def load_experiment_data(args, seed: int) -> ExperimentData:
                 dependency_strength=args.dependency_strength,
             )
             X_train, X_val, X_test, y_train, y_val, y_test = split_and_scale_data(X, y, seed, "classification")
-        elif args.dataset in {"mnist", "cifar10"}:
+        elif args.dataset in {"mnist", "cifar10", "brisc"}:
             flatten_images = getattr(args, "model_arch", "mlp") == "mlp"
             max_train = getattr(args, "max_train", None)
             max_test = getattr(args, "max_test", None)
             if args.dataset == "mnist":
                 X_train, X_test, y_train, y_test = load_mnist(max_train=max_train, max_test=max_test, flatten=flatten_images)
-            else:
+                class_names = [str(i) for i in range(10)]
+            elif args.dataset == "cifar10":
                 X_train, X_test, y_train, y_test = load_cifar10(max_train=max_train, max_test=max_test, flatten=flatten_images)
+                class_names = [str(i) for i in range(10)]
+            else:
+                X_train, X_test, y_train, y_test, class_names = load_brisc(
+                    brisc_root=getattr(args, "brisc_root", "./data/brisc2025"),
+                    image_size=getattr(args, "image_size", 128),
+                    max_train=max_train,
+                    max_test=max_test,
+                    flatten=flatten_images,
+                )
             X_train, X_val, y_train, y_val = train_test_split(
                 X_train,
                 y_train,
@@ -248,7 +332,6 @@ def load_experiment_data(args, seed: int) -> ExperimentData:
                 random_state=seed,
                 stratify=y_train,
             )
-            class_names = [str(i) for i in range(10)]
         else:
             dataset = STANDARD_CLASSIFICATION_DATASETS[args.dataset]()
             X = dataset.data
