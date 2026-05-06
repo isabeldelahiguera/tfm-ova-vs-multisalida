@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=tfm_exp
+#SBATCH --job-name=tfm_cifar10_vgg
 #SBATCH --partition=dios
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=20G
+#SBATCH --mem=32G
 #SBATCH --output=slurm_logs/%x-%j.out
 #SBATCH --error=slurm_logs/%x-%j.err
 
@@ -29,7 +29,6 @@ if torch.cuda.is_available():
 PY
 
 MODEL_ARCH="${MODEL_ARCH:-vgg}"
-DATASETS="${DATASETS:-mnist cifar10}"
 SEEDS="${SEEDS:-1}"
 COUPLING_MODES="${COUPLING_MODES:-ova}"
 EPOCHS="${EPOCHS:-50}"
@@ -39,19 +38,16 @@ BATCH_SIZE="${BATCH_SIZE:-64}"
 LEARNING_RATE="${LEARNING_RATE:-0.001}"
 JOB_ID="${SLURM_JOB_ID:-local}"
 
-for DATASET in ${DATASETS}; do
-  echo "Launching dataset=${DATASET}, model_arch=${MODEL_ARCH}, seeds=${SEEDS}"
-  python run_experiments.py \
-    --task classification \
-    --dataset "${DATASET}" \
-    --model-arch "${MODEL_ARCH}" \
-    --seeds ${SEEDS} \
-    --coupling-modes ${COUPLING_MODES} \
-    --epochs "${EPOCHS}" \
-    --early-stopping-patience "${EARLY_STOPPING_PATIENCE}" \
-    --early-stopping-min-delta "${EARLY_STOPPING_MIN_DELTA}" \
-    --batch-size "${BATCH_SIZE}" \
-    --learning-rate "${LEARNING_RATE}" \
-    --output-csv "resultados_slurm/exp_${DATASET}_${MODEL_ARCH}_${JOB_ID}.csv" \
-    --summary-csv "resultados_slurm/exp_${DATASET}_${MODEL_ARCH}_${JOB_ID}_summary.csv"
-done
+python run_experiments.py \
+  --task classification \
+  --dataset cifar10 \
+  --model-arch "${MODEL_ARCH}" \
+  --seeds ${SEEDS} \
+  --coupling-modes ${COUPLING_MODES} \
+  --epochs "${EPOCHS}" \
+  --early-stopping-patience "${EARLY_STOPPING_PATIENCE}" \
+  --early-stopping-min-delta "${EARLY_STOPPING_MIN_DELTA}" \
+  --batch-size "${BATCH_SIZE}" \
+  --learning-rate "${LEARNING_RATE}" \
+  --output-csv "resultados_slurm/exp_cifar10_${MODEL_ARCH}_${JOB_ID}.csv" \
+  --summary-csv "resultados_slurm/exp_cifar10_${MODEL_ARCH}_${JOB_ID}_summary.csv"

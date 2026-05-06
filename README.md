@@ -32,7 +32,23 @@ En esta primera aproximación se mantiene fija la configuración base de la red 
 
 En análisis posteriores se pueden estudiar otras configuraciones, por ejemplo cambiando `--hidden-layers`, activando `--batch-normalization`, variando `--epochs`, `--learning-rate` o `--batch-size`. Esto permite comprobar si las conclusiones se mantienen con otras arquitecturas e hiperparámetros.
 
+En datasets de imagen, como `MNIST`, `digits` y especialmente `CIFAR-10`, tiene sentido plantear una extensión con redes convolucionales (`CNN`). El MLP aplanado se mantiene como experimento base porque permite comparar todos los datasets bajo una misma familia de modelos y aislar el efecto de compartir salidas frente a entrenar modelos independientes. Sin embargo, al aplanar las imágenes se pierde la estructura espacial local, precisamente el tipo de información que una CNN puede aprovechar mediante filtros compartidos.
+
+Por este motivo, una comparación con CNNs puede incluirse como análisis de robustez arquitectónica en datasets de imagen: se repetiría la comparación entre una única CNN `multi-output` y `t` CNNs binarias independientes en esquema `OVA`. Esta extensión no cambia la hipótesis central del TFM, sino que permite estudiar si las conclusiones sobre acoplamiento de salidas se mantienen cuando cambia la parametrización y se introduce un sesgo inductivo espacial más adecuado para imágenes. En datasets tabulares no se considera una extensión natural, salvo que se reformulen explícitamente las variables como una estructura espacial artificial, lo cual no forma parte del objetivo principal.
+
+La primera extensión convolucional implementada es `--model-arch vgg`, una VGG compacta o `VGG-like`, no una VGG-16 estándar. Mantiene el patrón característico de VGG con convoluciones `3x3`, activaciones ReLU y bloques terminados en `MaxPool`, pero usa menos bloques y menos canales para que el experimento `OVA` sea viable. Esto es importante porque en MNIST y CIFAR-10 se entrenan 11 redes por semilla cuando se comparan `multi-output` y `OVA`: una red multiclase y diez redes binarias.
+
+La arquitectura `vgg` actual se usa como primer experimento de robustez en imagen. El plan experimental es:
+
+- Ejecutar primero `MNIST` y `CIFAR-10` con la VGG compacta para comprobar que el pipeline de imágenes funciona y medir el coste real de `OVA` en GPU.
+- Comparar esos resultados con los experimentos MLP aplanados ya existentes o equivalentes.
+- Si el coste computacional es razonable, añadir después una variante `vgg16` adaptada a imágenes pequeñas como extensión más estándar.
+
+Por tanto, en el estado actual del código, `vgg` debe interpretarse como una CNN inspirada en VGG y no como la arquitectura VGG-16 original.
+
 El preprocesamiento se mantiene deliberadamente sencillo: partición de los datos, estratificación en clasificación cuando `y` es un vector unidimensional, imputación básica de valores perdidos cuando existen, estandarización de variables tabulares y normalización específica para MNIST y CIFAR-10. La misma preparación de datos se aplica a todos los enfoques comparados para que la comparación no dependa de diferencias de preprocesamiento.
+
+El conjunto de validación se usa para `early stopping`: durante el entrenamiento se monitoriza la pérdida de validación, se conservan los pesos del modelo con menor `val_loss` y al final se restauran esos pesos antes de evaluar en test. Por defecto se usa `--early-stopping-patience 10` y `--early-stopping-min-delta 1e-4`. La paciencia indica cuántas épocas consecutivas sin mejora se permiten antes de parar; `min_delta` exige una reducción mínima de la pérdida para considerar que ha habido una mejora real. Si se quiere desactivar este criterio, se puede usar `--early-stopping-patience 0`.
 
 El objetivo no es optimizar cada dataset al máximo, sino comparar el efecto de compartir salidas frente a entrenar modelos separados. Técnicas como selección de variables, reducción de dimensionalidad, normalizaciones alternativas o aumentación de datos quedan como posibles extensiones.
 
@@ -44,7 +60,7 @@ El objetivo no es optimizar cada dataset al máximo, sino comparar el efecto de 
 |-- tfm/
 |   |-- config.py                   # Dataclass ExperimentData
 |   |-- data.py                     # Carga de datasets, datos sintéticos, partición y escalado
-|   |-- models.py                   # Definición del MLP
+|   |-- models.py                   # Definición del MLP y la VGG compacta
 |   |-- training.py                 # DataLoaders, bucle de entrenamiento y predicciones
 |   |-- metrics.py                  # Métricas de clasificación y regresión
 |   |-- evaluation.py               # Evaluación de modelos entrenados
@@ -54,6 +70,7 @@ El objetivo no es optimizar cada dataset al máximo, sino comparar el efecto de 
 |   `-- resultados_clasificacion.md # Registro resumido de resultados y conclusiones provisionales
 |-- resultados_clasificacion.ipynb  # Análisis de resultados de clasificación
 |-- resultados_clasificacion/       # Tablas combinadas generadas por la notebook
+|-- scripts/                        # Scripts SLURM para lanzar experimentos en GPU
 |-- exp_*.csv                       # Resultados detallados de experimentos
 `-- exp_*_summary.csv               # Resultados medios agregados por configuración
 ```
@@ -95,11 +112,39 @@ Ejemplo con MNIST, que tiene 10 clases y es más costoso:
 python run_experiments.py --task classification --dataset mnist --seeds 1 --coupling-modes ova --output-csv exp_mnist.csv --summary-csv exp_mnist_summary.csv
 ```
 
+Ejemplo con MNIST usando VGG compacta sobre la imagen, sin aplanarla:
+
+```bash
+python run_experiments.py --task classification --dataset mnist --model-arch vgg --seeds 1 --coupling-modes ova --epochs 50 --early-stopping-patience 10 --early-stopping-min-delta 1e-4 --batch-size 64 --output-csv exp_mnist_vgg.csv --summary-csv exp_mnist_vgg_summary.csv
+```
+
 Ejemplo con CIFAR-10:
 
 ```bash
 python run_experiments.py --task classification --dataset cifar10 --seeds 1 --coupling-modes ova --output-csv exp_cifar10.csv --summary-csv exp_cifar10_summary.csv
 ```
+
+Ejemplo con CIFAR-10 usando VGG compacta:
+
+```bash
+python run_experiments.py --task classification --dataset cifar10 --model-arch vgg --seeds 1 --coupling-modes ova --epochs 50 --early-stopping-patience 10 --early-stopping-min-delta 1e-4 --batch-size 64 --output-csv exp_cifar10_vgg.csv --summary-csv exp_cifar10_vgg_summary.csv
+```
+
+Para lanzar los experimentos VGG en SLURM, es recomendable enviar un job por dataset:
+
+```bash
+sbatch scripts/run_tfm_mnist_vgg_slurm.sh
+sbatch scripts/run_tfm_cifar10_vgg_slurm.sh
+```
+
+Así, si CIFAR-10 tarda más o falla por memoria, no arrastra el experimento de MNIST. Se pueden cambiar parámetros sin editar los ficheros, por ejemplo:
+
+```bash
+SEEDS="1 2 3" EPOCHS=50 EARLY_STOPPING_PATIENCE=10 EARLY_STOPPING_MIN_DELTA=0.0001 BATCH_SIZE=128 sbatch scripts/run_tfm_mnist_vgg_slurm.sh
+SEEDS="1 2 3" EPOCHS=50 EARLY_STOPPING_PATIENCE=10 EARLY_STOPPING_MIN_DELTA=0.0001 BATCH_SIZE=128 sbatch scripts/run_tfm_cifar10_vgg_slurm.sh
+```
+
+También se conserva `scripts/run_tfm_slurm.sh` como lanzador combinado si se quiere ejecutar más de un dataset dentro del mismo job.
 
 Ejemplo con Dermatology:
 
@@ -216,9 +261,9 @@ Si un dataset contiene valores perdidos, como ocurre en `dermatology` con la var
 
 El objetivo de esta imputación y estandarización no es mejorar un enfoque frente a otro, sino evitar errores por valores ausentes y reducir problemas de escala que pueden afectar al entrenamiento de redes neuronales. La misma partición y las mismas transformaciones se aplican a todos los enfoques comparados, por lo que la comparación entre la red `multi-output` y las redes independientes se mantiene en igualdad de condiciones.
 
-En MNIST se usa un preprocesamiento específico de imagen: los píxeles se aplanan de `28x28` a `784` variables y se normalizan dividiendo entre `255.0`, quedando en el rango `[0, 1]`.
+En MNIST se usa un preprocesamiento específico de imagen: los píxeles se normalizan dividiendo entre `255.0`, quedando en el rango `[0, 1]`. Con `--model-arch mlp`, cada imagen se aplana de `28x28` a `784` variables. Con `--model-arch vgg`, se conserva la forma espacial como tensor `1x28x28`.
 
-En CIFAR-10 se aplica un tratamiento análogo: las imágenes RGB se aplanan de `32x32x3` a `3072` variables y se normalizan dividiendo entre `255.0`.
+En CIFAR-10 se aplica un tratamiento análogo: las imágenes RGB se normalizan dividiendo entre `255.0`. Con `--model-arch mlp`, cada imagen se aplana de `32x32x3` a `3072` variables. Con `--model-arch vgg`, se conserva como tensor `3x32x32`.
 
 ## Salidas
 
@@ -228,6 +273,8 @@ Cada ejecución genera dos ficheros:
 - `summary_csv`: media de resultados por configuración.
 
 Además de las métricas predictivas, se guarda `train_time_seconds`, que mide el tiempo de entrenamiento de cada enfoque. Esta variable es útil para comparar el coste computacional de entrenar una única red `multi-output` frente a entrenar varias redes independientes. Debe interpretarse con cuidado, porque depende del hardware, del uso de CPU/GPU y de la carga del sistema durante la ejecución.
+
+También se guardan variables asociadas al `early stopping`: `best_val_loss`, `epochs_trained`, `total_epochs_trained` y `models_stopped_early`. En modelos únicos, `epochs_trained` y `total_epochs_trained` coinciden. En enfoques descompuestos como `OVA`, `epochs_trained` resume la media de épocas entrenadas por red binaria y `total_epochs_trained` suma las épocas de todas las redes entrenadas.
 
 ## Métricas
 

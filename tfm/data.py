@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import List, Tuple
 
 import numpy as np
@@ -22,16 +24,23 @@ STANDARD_REGRESSION_DATASETS = {
 }
 
 
-def load_mnist(max_train: int | None = None, max_test: int | None = None):
+def load_mnist(max_train: int | None = None, max_test: int | None = None, flatten: bool = True):
     from torchvision.datasets import MNIST
 
     train_dataset = MNIST(root="./data", train=True, download=True)
     test_dataset = MNIST(root="./data", train=False, download=True)
 
-    X_train = train_dataset.data.numpy().reshape(-1, 28 * 28) / 255.0
+    X_train = train_dataset.data.numpy().astype(np.float32) / 255.0
     y_train = train_dataset.targets.numpy()
-    X_test = test_dataset.data.numpy().reshape(-1, 28 * 28) / 255.0
+    X_test = test_dataset.data.numpy().astype(np.float32) / 255.0
     y_test = test_dataset.targets.numpy()
+
+    if flatten:
+        X_train = X_train.reshape(-1, 28 * 28)
+        X_test = X_test.reshape(-1, 28 * 28)
+    else:
+        X_train = X_train[:, None, :, :]
+        X_test = X_test[:, None, :, :]
 
     if max_train is not None:
         X_train = X_train[:max_train]
@@ -44,18 +53,40 @@ def load_mnist(max_train: int | None = None, max_test: int | None = None):
     return X_train, X_test, y_train, y_test
 
 
-def load_cifar10(max_train: int | None = None, max_test: int | None = None):
-    from torchvision.datasets import CIFAR10
+def load_cifar10(max_train: int | None = None, max_test: int | None = None, flatten: bool = True):
+    try:
+        X, y = fetch_openml(data_id=40927, as_frame=False, return_X_y=True, data_home="./data/openml")
+        X = np.asarray(X)
+        y = np.asarray(y)
+        if X.shape[0] < 60000:
+            raise RuntimeError(f"Expected 60000 CIFAR-10 samples from OpenML, got {X.shape[0]}.")
+        try:
+            y = y.astype(int)
+        except (TypeError, ValueError):
+            y = pd.Categorical(y).codes
 
-    train_dataset = CIFAR10(root="./data", train=True, download=True)
-    test_dataset = CIFAR10(root="./data", train=False, download=True)
-    X_train = train_dataset.data.reshape(-1, 32 * 32 * 3)
-    y_train = np.array(train_dataset.targets)
-    X_test = test_dataset.data.reshape(-1, 32 * 32 * 3)
-    y_test = np.array(test_dataset.targets)
+        X_train = X[:50000]
+        y_train = y[:50000]
+        X_test = X[50000:60000]
+        y_test = y[50000:60000]
+    except Exception:
+        from torchvision.datasets import CIFAR10
+
+        train_dataset = CIFAR10(root="./data", train=True, download=True)
+        test_dataset = CIFAR10(root="./data", train=False, download=True)
+        X_train = train_dataset.data
+        y_train = np.array(train_dataset.targets)
+        X_test = test_dataset.data
+        y_test = np.array(test_dataset.targets)
 
     X_train = X_train.astype(np.float32) / 255.0
     X_test = X_test.astype(np.float32) / 255.0
+    if flatten:
+        X_train = X_train.reshape(-1, 32 * 32 * 3)
+        X_test = X_test.reshape(-1, 32 * 32 * 3)
+    else:
+        X_train = X_train.reshape(-1, 32, 32, 3).transpose(0, 3, 1, 2)
+        X_test = X_test.reshape(-1, 32, 32, 3).transpose(0, 3, 1, 2)
 
     if max_train is not None:
         X_train = X_train[:max_train]
@@ -203,10 +234,13 @@ def load_experiment_data(args, seed: int) -> ExperimentData:
             )
             X_train, X_val, X_test, y_train, y_val, y_test = split_and_scale_data(X, y, seed, "classification")
         elif args.dataset in {"mnist", "cifar10"}:
+            flatten_images = getattr(args, "model_arch", "mlp") == "mlp"
+            max_train = getattr(args, "max_train", None)
+            max_test = getattr(args, "max_test", None)
             if args.dataset == "mnist":
-                X_train, X_test, y_train, y_test = load_mnist()
+                X_train, X_test, y_train, y_test = load_mnist(max_train=max_train, max_test=max_test, flatten=flatten_images)
             else:
-                X_train, X_test, y_train, y_test = load_cifar10()
+                X_train, X_test, y_train, y_test = load_cifar10(max_train=max_train, max_test=max_test, flatten=flatten_images)
             X_train, X_val, y_train, y_val = train_test_split(
                 X_train,
                 y_train,

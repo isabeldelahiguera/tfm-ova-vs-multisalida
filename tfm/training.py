@@ -1,4 +1,5 @@
 import random
+import copy
 from typing import Dict, Tuple
 
 import numpy as np
@@ -101,13 +102,40 @@ def fit_model(
     device,
     problem_mode: str,
     epochs: int,
+    early_stopping_patience: int = 0,
+    early_stopping_min_delta: float = 0.0,
 ) -> Dict[str, float]:
     best_val_loss = float("inf")
+    best_state_dict = None
+    epochs_without_improvement = 0
+    epochs_trained = 0
+
     for _ in range(epochs):
         run_epoch(model, train_loader, criterion, optimizer, device, problem_mode)
         val_loss = run_epoch(model, val_loader, criterion, None, device, problem_mode)
-        best_val_loss = min(best_val_loss, val_loss)
-    return {"best_val_loss": best_val_loss}
+        epochs_trained += 1
+
+        if val_loss < best_val_loss - early_stopping_min_delta:
+            best_val_loss = val_loss
+            best_state_dict = copy.deepcopy(model.state_dict())
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
+            break
+
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+
+    stopped_early = early_stopping_patience > 0 and epochs_trained < epochs
+    return {
+        "best_val_loss": best_val_loss,
+        "epochs_trained": epochs_trained,
+        "total_epochs_trained": epochs_trained,
+        "stopped_early": stopped_early,
+        "models_stopped_early": int(stopped_early),
+    }
 
 
 def collect_predictions(model, data_loader, device) -> Tuple[np.ndarray, np.ndarray]:
@@ -123,4 +151,3 @@ def collect_predictions(model, data_loader, device) -> Tuple[np.ndarray, np.ndar
             targets_all.append(targets.numpy())
 
     return np.concatenate(targets_all, axis=0), np.concatenate(outputs_all, axis=0)
-
