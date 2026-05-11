@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=tfm_cifar10_vgg
+#SBATCH --job-name=tfm_tb_vgg
 #SBATCH --partition=dios
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
@@ -35,13 +35,17 @@ COUPLING_MODES="${COUPLING_MODES:-ova}"
 EPOCHS="${EPOCHS:-50}"
 EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-10}"
 EARLY_STOPPING_MIN_DELTA="${EARLY_STOPPING_MIN_DELTA:-0.0001}"
-BATCH_SIZE="${BATCH_SIZE:-64}"
+BATCH_SIZE="${BATCH_SIZE:-32}"
 LEARNING_RATE="${LEARNING_RATE:-0.001}"
+IMAGE_SIZE="${IMAGE_SIZE:-128}"
+TB_ROOT="${TB_ROOT:-/mnt/homeGPU/imhiguera/data/tb_chest_xray}"
 JOB_ID="${SLURM_JOB_ID:-local}"
 
 python run_experiments.py \
   --task classification \
-  --dataset cifar10 \
+  --dataset tb_chest_xray \
+  --tb-root "${TB_ROOT}" \
+  --image-size "${IMAGE_SIZE}" \
   --model-arch "${MODEL_ARCH}" \
   --seeds ${SEEDS} \
   --coupling-modes ${COUPLING_MODES} \
@@ -50,5 +54,5 @@ python run_experiments.py \
   --early-stopping-min-delta "${EARLY_STOPPING_MIN_DELTA}" \
   --batch-size "${BATCH_SIZE}" \
   --learning-rate "${LEARNING_RATE}" \
-  --output-csv "resultados_slurm/exp_cifar10_${MODEL_ARCH}_${JOB_ID}.csv" \
-  --summary-csv "resultados_slurm/exp_cifar10_${MODEL_ARCH}_${JOB_ID}_summary.csv"
+  --output-csv "resultados_slurm/exp_tb_${MODEL_ARCH}_${IMAGE_SIZE}_${JOB_ID}.csv" \
+  --summary-csv "resultados_slurm/exp_tb_${MODEL_ARCH}_${IMAGE_SIZE}_${JOB_ID}_summary.csv"

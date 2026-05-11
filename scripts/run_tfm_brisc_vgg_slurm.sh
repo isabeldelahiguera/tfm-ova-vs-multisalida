@@ -10,6 +10,7 @@
 set -euo pipefail
 
 export PATH="/opt/anaconda/bin:/opt/anaconda/anaconda3/bin:$PATH"
+export PS1="${PS1-}"
 eval "$(conda shell.bash hook)"
 
 cd /mnt/homeGPU/imhiguera

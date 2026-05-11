@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-train", type=int, default=None)
     parser.add_argument("--max-test", type=int, default=None)
     parser.add_argument("--brisc-root", type=str, default="./data/brisc2025")
+    parser.add_argument("--tb-root", type=str, default="./data/tb_chest_xray")
     parser.add_argument("--image-size", type=int, default=128)
     parser.add_argument("--output-csv", type=str, default="tfm_results.csv")
     parser.add_argument("--summary-csv", type=str, default="tfm_results_summary.csv")

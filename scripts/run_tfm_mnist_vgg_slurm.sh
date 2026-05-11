@@ -10,6 +10,7 @@
 set -euo pipefail
 
 export PATH="/opt/anaconda/bin:/opt/anaconda/anaconda3/bin:$PATH"
+export PS1="${PS1-}"
 eval "$(conda shell.bash hook)"
 
 cd /mnt/homeGPU/imhiguera
@@ -29,7 +30,7 @@ if torch.cuda.is_available():
 PY
 
 MODEL_ARCH="${MODEL_ARCH:-vgg}"
-SEEDS="${SEEDS:-1}"
+SEEDS="${SEEDS:-1 2 3 4 5 6 7 8 9 10}"
 COUPLING_MODES="${COUPLING_MODES:-ova}"
 EPOCHS="${EPOCHS:-50}"
 EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-10}"

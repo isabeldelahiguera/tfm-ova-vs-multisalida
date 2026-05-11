@@ -56,30 +56,14 @@ def load_mnist(max_train: int | None = None, max_test: int | None = None, flatte
 
 
 def load_cifar10(max_train: int | None = None, max_test: int | None = None, flatten: bool = True):
-    try:
-        X, y = fetch_openml(data_id=40927, as_frame=False, return_X_y=True, data_home="./data/openml")
-        X = np.asarray(X)
-        y = np.asarray(y)
-        if X.shape[0] < 60000:
-            raise RuntimeError(f"Expected 60000 CIFAR-10 samples from OpenML, got {X.shape[0]}.")
-        try:
-            y = y.astype(int)
-        except (TypeError, ValueError):
-            y = pd.Categorical(y).codes
+    from torchvision.datasets import CIFAR10
 
-        X_train = X[:50000]
-        y_train = y[:50000]
-        X_test = X[50000:60000]
-        y_test = y[50000:60000]
-    except Exception:
-        from torchvision.datasets import CIFAR10
-
-        train_dataset = CIFAR10(root="./data", train=True, download=True)
-        test_dataset = CIFAR10(root="./data", train=False, download=True)
-        X_train = train_dataset.data
-        y_train = np.array(train_dataset.targets)
-        X_test = test_dataset.data
-        y_test = np.array(test_dataset.targets)
+    train_dataset = CIFAR10(root="./data", train=True, download=True)
+    test_dataset = CIFAR10(root="./data", train=False, download=True)
+    X_train = train_dataset.data
+    y_train = np.array(train_dataset.targets)
+    X_test = test_dataset.data
+    y_test = np.array(test_dataset.targets)
 
     X_train = X_train.astype(np.float32) / 255.0
     X_test = X_test.astype(np.float32) / 255.0
@@ -170,6 +154,41 @@ def load_brisc(
         flatten,
     )
     return X_train, X_test, y_train, y_test, class_names
+
+
+def load_tb_chest_xray_images(
+    root: str | Path,
+    image_size: int,
+    flatten: bool,
+):
+    dataset_root = Path(root).expanduser()
+    class_names = ["Normal", "Tuberculosis"]
+    images = []
+    labels = []
+
+    for class_idx, class_name in enumerate(class_names):
+        class_dir = dataset_root / class_name
+        if not class_dir.exists():
+            raise FileNotFoundError(f"Expected TB class directory not found: {class_dir}")
+        image_paths = sorted(
+            path for path in class_dir.iterdir() if path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        )
+        for image_path in image_paths:
+            with Image.open(image_path) as image:
+                image = image.convert("L").resize((image_size, image_size), Image.BILINEAR)
+                array = np.asarray(image, dtype=np.float32) / 255.0
+            images.append(array)
+            labels.append(class_idx)
+
+    X = np.stack(images, axis=0)
+    y = np.asarray(labels, dtype=np.int64)
+
+    if flatten:
+        X = X.reshape(X.shape[0], image_size * image_size)
+    else:
+        X = X[:, None, :, :]
+
+    return X, y, ["normal", "tuberculosis"]
 
 
 def load_dermatology():
@@ -307,7 +326,7 @@ def load_experiment_data(args, seed: int) -> ExperimentData:
                 dependency_strength=args.dependency_strength,
             )
             X_train, X_val, X_test, y_train, y_val, y_test = split_and_scale_data(X, y, seed, "classification")
-        elif args.dataset in {"mnist", "cifar10", "brisc"}:
+        elif args.dataset in {"mnist", "cifar10", "brisc", "tb_chest_xray"}:
             flatten_images = getattr(args, "model_arch", "mlp") == "mlp"
             max_train = getattr(args, "max_train", None)
             max_test = getattr(args, "max_test", None)
@@ -317,7 +336,7 @@ def load_experiment_data(args, seed: int) -> ExperimentData:
             elif args.dataset == "cifar10":
                 X_train, X_test, y_train, y_test = load_cifar10(max_train=max_train, max_test=max_test, flatten=flatten_images)
                 class_names = [str(i) for i in range(10)]
-            else:
+            elif args.dataset == "brisc":
                 X_train, X_test, y_train, y_test, class_names = load_brisc(
                     brisc_root=getattr(args, "brisc_root", "./data/brisc2025"),
                     image_size=getattr(args, "image_size", 128),
@@ -325,13 +344,33 @@ def load_experiment_data(args, seed: int) -> ExperimentData:
                     max_test=max_test,
                     flatten=flatten_images,
                 )
-            X_train, X_val, y_train, y_val = train_test_split(
-                X_train,
-                y_train,
-                test_size=0.15,
-                random_state=seed,
-                stratify=y_train,
-            )
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X_train,
+                    y_train,
+                    test_size=0.15,
+                    random_state=seed,
+                    stratify=y_train,
+                )
+            else:
+                X, y, class_names = load_tb_chest_xray_images(
+                    root=getattr(args, "tb_root", "./data/tb_chest_xray"),
+                    image_size=getattr(args, "image_size", 128),
+                    flatten=flatten_images,
+                )
+                X_train_val, X_test, y_train_val, y_test = train_test_split(
+                    X,
+                    y,
+                    test_size=0.15,
+                    random_state=seed,
+                    stratify=y,
+                )
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X_train_val,
+                    y_train_val,
+                    test_size=0.17647058823529413,
+                    random_state=seed,
+                    stratify=y_train_val,
+                )
         else:
             dataset = STANDARD_CLASSIFICATION_DATASETS[args.dataset]()
             X = dataset.data

@@ -389,7 +389,7 @@ def should_run_ovo(args, experiment_data: ExperimentData) -> bool:
 
 def validate_args(args) -> None:
     if args.task == "classification":
-        valid_datasets = set(STANDARD_CLASSIFICATION_DATASETS.keys()) | {"synthetic_multiclass"}
+        valid_datasets = set(STANDARD_CLASSIFICATION_DATASETS.keys()) | {"synthetic_multiclass", "tb_chest_xray"}
         valid_modes = {"multi-output", "ova", "ovo"}
     else:
         valid_datasets = set(STANDARD_REGRESSION_DATASETS.keys()) | {"synthetic_multiregression"}
@@ -398,8 +398,8 @@ def validate_args(args) -> None:
     if args.dataset not in valid_datasets:
         raise ValueError(f"Dataset '{args.dataset}' is not valid for task '{args.task}'")
 
-    if args.model_arch == "vgg" and (args.task != "classification" or args.dataset not in {"mnist", "cifar10", "brisc"}):
-        raise ValueError("model_arch='vgg' is only supported for classification with mnist, cifar10 or brisc")
+    if args.model_arch == "vgg" and (args.task != "classification" or args.dataset not in {"mnist", "cifar10", "brisc", "tb_chest_xray"}):
+        raise ValueError("model_arch='vgg' is only supported for classification with mnist, cifar10, brisc or tb_chest_xray")
 
     if args.image_size <= 0:
         raise ValueError("image_size must be greater than 0")
