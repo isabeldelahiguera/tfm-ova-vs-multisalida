@@ -33,6 +33,10 @@ power_analysis_results*.csv
 resultados_clasificacion/
 
 
+# Local agent/editor state
+.agents/
+.codex/
+
 # Legacy/local files
 slurm_logs/
 resultados_slurm/
@@ -40,3 +44,6 @@ README_old.md
 prueba.sh
 gile
 gile.pub
+
+# Slurm job scripts
+scripts/*_slurm.sh
