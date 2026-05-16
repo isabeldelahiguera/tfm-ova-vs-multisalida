@@ -48,6 +48,4 @@ gile.pub
 # Slurm job scripts
 scripts/*_slurm.sh
 
-# Local legacy copy of the image size study
-estudio_tam.py
 
