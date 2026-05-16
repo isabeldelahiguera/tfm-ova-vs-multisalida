@@ -128,3 +128,12 @@ El parser admite, entre otros:
 - `--max-test`
 - `--image-size`
 
+`--max-train` y `--max-test` son útiles para pruebas rápidas con datasets grandes.
+
+## Scripts Auxiliares
+
+Además de `run_experiments.py`, hay scripts auxiliares en `scripts/`:
+
+- `estudio_tamano_imagenes.py`: resume los tamaños originales y relaciones de aspecto de las imágenes de BRISC y tuberculosis. Sirve para justificar el redimensionado común usado en los experimentos VGG.
+- `power_analysis_paired.py`: estima el número de semillas necesarias para comparar `OVA` y `multi-output` a partir de resultados piloto.
+- `wilcoxon_paired_test.py`: aplica un test pareado de Wilcoxon sobre una métrica concreta.
