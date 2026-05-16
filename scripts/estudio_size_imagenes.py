@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import pandas as pd
+from PIL import Image
+from sklearn.model_selection import train_test_split
+
+
+BRISC_CLASS_NAMES = ["glioma", "meningioma", "pituitary", "no_tumor"]
+TB_CLASS_NAMES = ["Normal", "Tuberculosis"]
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Summarize original image sizes for BRISC and tuberculosis datasets. "
+            "This is useful to justify the common resize used by the VGG experiments."
+        )
+    )
+    parser.add_argument("--brisc-train-root", default="./data/brisc2025/train")
+    parser.add_argument("--tb-root", default="./data/tb_chest_xray")
+    parser.add_argument("--seed", type=int, default=1)
+    return parser
+
+
+def collect_paths(root: str | Path, class_names: list[str]) -> list[tuple[int, str, Path]]:
+    rows = []
+    dataset_root = Path(root)
+    for class_idx, class_name in enumerate(class_names):
+        class_dir = dataset_root / class_name
+        if not class_dir.exists():
+            raise FileNotFoundError(f"Expected class directory not found: {class_dir}")
+        for image_path in sorted(class_dir.iterdir()):
+            if image_path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
+                rows.append((class_idx, class_name, image_path))
+    return rows
+
+
+def summarize_image_sizes(image_paths_with_class: list[tuple[str, Path]]) -> pd.DataFrame:
+    rows = []
+    for class_name, image_path in image_paths_with_class:
+        with Image.open(image_path) as image:
+            width, height = image.size
+        rows.append(
+            {
+                "class_name": class_name,
+                "path": str(image_path),
+                "width": width,
+                "height": height,
+                "aspect_ratio": width / height,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def summarize_and_print(title: str, image_paths_with_class: list[tuple[str, Path]]) -> None:
+    df = summarize_image_sizes(image_paths_with_class)
+    summary_by_class = df.groupby("class_name")[["width", "height", "aspect_ratio"]].agg(
+        ["mean", "median", "min", "max", "std"]
+    )
+    summary_global = df[["width", "height", "aspect_ratio"]].agg(["mean", "median", "min", "max", "std"])
+
+    print(f"=== {title} ===")
+    print("Resumen por clase:")
+    print(summary_by_class)
+    print()
+    print("Resumen global:")
+    print(summary_global)
+    print()
+
+
+def select_tb_train_split(tb_rows: list[tuple[int, str, Path]], seed: int) -> list[tuple[int, str, Path]]:
+    tb_labels = [class_idx for class_idx, _, _ in tb_rows]
+    tb_train_val, _ = train_test_split(
+        tb_rows,
+        test_size=0.15,
+        random_state=seed,
+        stratify=tb_labels,
+    )
+    tb_train_val_labels = [class_idx for class_idx, _, _ in tb_train_val]
+    tb_train, _ = train_test_split(
+        tb_train_val,
+        test_size=0.17647058823529413,
+        random_state=seed,
+        stratify=tb_train_val_labels,
+    )
+    return tb_train
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+
+    brisc_rows = collect_paths(args.brisc_train_root, BRISC_CLASS_NAMES)
+    summarize_and_print("BRISC train", [(class_name, image_path) for _, class_name, image_path in brisc_rows])
+
+    tb_rows = collect_paths(args.tb_root, TB_CLASS_NAMES)
+    tb_train = select_tb_train_split(tb_rows, args.seed)
+    summarize_and_print(
+        f"TB train (same split logic as loader, seed={args.seed})",
+        [(class_name, image_path) for _, class_name, image_path in tb_train],
+    )
+
+
+if __name__ == "__main__":
+    main()
