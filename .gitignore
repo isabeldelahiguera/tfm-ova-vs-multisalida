@@ -24,10 +24,16 @@ data/
 *.out
 *.toc
 
-# Legacy/local result files not referenced by the current analysis docs
-# Legacy/local files
+# Generated experiment outputs
+exp_*.csv
 training_results*.csv
 tfm_results*.csv
+tfm_results_summary*.csv
+power_analysis_results*.csv
+resultados_clasificacion/
+
+
+# Legacy/local files
 slurm_logs/
 resultados_slurm/
 README_old.md
