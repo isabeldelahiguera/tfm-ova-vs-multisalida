@@ -13,12 +13,6 @@ TB_CLASS_NAMES = ["Normal", "Tuberculosis"]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Summarize original image sizes for BRISC and tuberculosis datasets. "
-            "This is useful to justify the common resize used by the VGG experiments."
-        )
-    )
     parser.add_argument("--brisc-train-root", default="./data/brisc2025/train")
     parser.add_argument("--tb-root", default="./data/tb_chest_xray")
     parser.add_argument("--seed", type=int, default=1)
