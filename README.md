@@ -11,14 +11,14 @@ La comparación se interpreta de forma predictiva y funcional. No se asume equiv
 
 ## Resultados
 
-Los resultados finales actuales están en `resultados_10semillas/`. Son experimentos ejecutados con 10 semillas por configuración.
+Los resultados finales actuales están en `resultados_10semillas/`. La base experimental usa 10 semillas por configuración, con ampliaciones puntuales cuando el análisis estadístico lo aconseja o cuando ya se dispone de ejecuciones adicionales.
 
 Cada dataset tiene dos ficheros:
 
 - `*_10semillas.csv`: resultados detallados por semilla y tipo de modelo.
 - `*_10semillas_summary.csv`: medias agregadas por configuración.
 
-Los CSV proceden de ejecuciones en SLURM, pero se han copiado a `resultados_10semillas/` con nombres estables y sin ids internos de jobs. La carpeta local `resultados_slurm/` queda como zona de trabajo y no se versiona.
+Algunos datasets tienen además versiones con más semillas, por ejemplo `iris_mlp_22semillas.csv` y `brisc_vgg_128_12semillas.csv`. Los CSV proceden de ejecuciones en SLURM, pero se han copiado a `resultados_10semillas/` con nombres estables y sin identificadores internos de jobs. La carpeta local `resultados_slurm/` queda como zona de trabajo y no se versiona.
 
 ## Experimentos Actuales
 
@@ -137,3 +137,14 @@ En clasificación se guardan:
 También se guardan variables asociadas al `early stopping`, como `best_val_loss`, `epochs_trained`, `total_epochs_trained` y `models_stopped_early`.
 
 Estas métricas permiten comparar no solo el porcentaje global de aciertos, sino también el comportamiento por clase y el coste computacional de entrenar una red multiclase frente a varias redes binarias.
+
+## Análisis Estadístico
+
+Los scripts auxiliares de `scripts/` incluyen análisis de potencia y pruebas estadísticas sobre las diferencias pareadas `OVA - multi-output`:
+
+- `analisis_potencia_wilcoxon.py`: estima por simulación Monte Carlo el número de semillas necesario para que Wilcoxon detecte una diferencia relevante.
+- `test_wilcoxon_pareado.py`: aplica el test pareado de Wilcoxon a uno o varios CSV.
+- `analisis_potencia_tost_bootstrap.py`: estima por simulación Monte Carlo el número de semillas necesario para declarar equivalencia práctica mediante IC bootstrap de la mediana.
+- `test_equivalencia_tost_bootstrap.py`: aplica el análisis de equivalencia TOST/bootstrap usando un margen práctico, por defecto `±0.02` en `f1_macro`.
+
+Wilcoxon evalúa evidencia de diferencia estadística. El análisis TOST/bootstrap evalúa equivalencia práctica dentro de un margen definido. Ambos enfoques se interpretan de forma complementaria.

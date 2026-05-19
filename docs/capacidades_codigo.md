@@ -134,6 +134,10 @@ El parser admite, entre otros:
 
 Además de `run_experiments.py`, hay scripts auxiliares en `scripts/`:
 
-- `estudio_tamano_imagenes.py`: resume los tamaños originales y relaciones de aspecto de las imágenes de BRISC y tuberculosis. Sirve para justificar el redimensionado común usado en los experimentos VGG.
-- `power_analysis_paired.py`: estima el número de semillas necesarias para comparar `OVA` y `multi-output` a partir de resultados piloto.
-- `wilcoxon_paired_test.py`: aplica un test pareado de Wilcoxon sobre una métrica concreta.
+- `estudio_size_imagenes.py`: resume los tamaños originales y relaciones de aspecto de las imágenes de BRISC y tuberculosis. Sirve para justificar el redimensionado común usado en los experimentos VGG.
+- `analisis_potencia_wilcoxon.py`: estima por simulación Monte Carlo el número de semillas necesarias para que el test de Wilcoxon detecte una diferencia relevante entre `OVA` y `multi-output`.
+- `test_wilcoxon_pareado.py`: aplica el test pareado de Wilcoxon sobre una métrica concreta.
+- `analisis_potencia_tost_bootstrap.py`: estima por simulación Monte Carlo el número de semillas necesarias para declarar equivalencia mediante un IC bootstrap de la mediana dentro de un margen práctico.
+- `test_equivalencia_tost_bootstrap.py`: aplica el análisis de equivalencia TOST/bootstrap usando un IC bootstrap de la mediana de las diferencias pareadas.
+
+Los análisis de potencia se usan como referencia para valorar si el número de semillas es suficiente para detectar diferencias relevantes o declarar equivalencia práctica. Los tests finales se interpretan sobre las diferencias pareadas observadas en cada CSV.

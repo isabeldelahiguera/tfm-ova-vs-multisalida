@@ -15,6 +15,19 @@ def evaluate_multiclass_model(model, experiment_data: ExperimentData, args, devi
     return classification_metrics(y_true, y_pred)
 
 
+def sigmoid_estable(logits: np.ndarray) -> np.ndarray:
+    probabilidades = np.empty_like(logits, dtype=np.float64)
+
+    # Para los positivos no hay problema de estabilidad, ya que exp(-logits) será pequeño.
+    positivos = logits >= 0
+    probabilidades[positivos] = 1.0 / (1.0 + np.exp(-logits[positivos]))
+
+    # Para los negativos, usamos una expresión equivalente que evita overflow
+    exp_logits = np.exp(logits[~positivos])
+    probabilidades[~positivos] = exp_logits / (1.0 + exp_logits)
+
+    return probabilidades
+
 def evaluate_ova_ensemble(models, experiment_data: ExperimentData, args, device) -> Dict[str, float]:
     test_loader = build_test_loader(experiment_data.X_test, experiment_data.y_test, args.batch_size, torch.long)
     y_true = None
@@ -24,7 +37,7 @@ def evaluate_ova_ensemble(models, experiment_data: ExperimentData, args, device)
         batch_targets, logits = collect_predictions(model, test_loader, device)
         if y_true is None:
             y_true = batch_targets
-        probabilities.append(1.0 / (1.0 + np.exp(-logits.squeeze(-1))))
+        probabilities.append(sigmoid_estable(logits.squeeze(-1)))
 
     y_pred = np.column_stack(probabilities).argmax(axis=1)
     return classification_metrics(y_true, y_pred)
@@ -40,7 +53,7 @@ def evaluate_ovo_ensemble(pair_models, experiment_data: ExperimentData, args, de
         if y_true is None:
             y_true = batch_targets
 
-        probabilities_b = 1.0 / (1.0 + np.exp(-logits.squeeze(-1)))
+        probabilities_b = sigmoid_estable(logits.squeeze(-1))
         vote_matrix[:, class_a] += 1.0 - probabilities_b
         vote_matrix[:, class_b] += probabilities_b
 

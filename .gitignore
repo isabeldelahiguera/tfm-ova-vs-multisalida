@@ -48,4 +48,6 @@ gile.pub
 # Slurm job scripts
 scripts/*_slurm.sh
 
-
+# Statistical results
+resultados_estadisticos/
+resultados_10semillas/
