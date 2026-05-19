@@ -11,14 +11,14 @@ La comparación se interpreta de forma predictiva y funcional. No se asume equiv
 
 ## Resultados
 
-Los resultados finales actuales están en `resultados_10semillas/`. La base experimental usa 10 semillas por configuración, con ampliaciones puntuales cuando el análisis estadístico lo aconseja o cuando ya se dispone de ejecuciones adicionales.
+Los resultados detallados de los experimentos se guardan localmente en `resultados_10semillas/`, pero esa carpeta no se versiona en GitHub. Contiene los CSV generados a partir de las ejecuciones experimentales y se mantiene como material de trabajo local.
 
-Cada dataset tiene dos ficheros:
+La base experimental usa 10 semillas por configuración, con ampliaciones puntuales cuando el análisis estadístico lo aconseja o cuando ya se dispone de ejecuciones adicionales. En la versión local, cada dataset puede tener dos ficheros:
 
 - `*_10semillas.csv`: resultados detallados por semilla y tipo de modelo.
 - `*_10semillas_summary.csv`: medias agregadas por configuración.
 
-Algunos datasets tienen además versiones con más semillas, por ejemplo `iris_mlp_22semillas.csv` y `brisc_vgg_128_12semillas.csv`. Los CSV proceden de ejecuciones en SLURM, pero se han copiado a `resultados_10semillas/` con nombres estables y sin identificadores internos de jobs. La carpeta local `resultados_slurm/` queda como zona de trabajo y no se versiona.
+Algunos datasets tienen además versiones con más semillas, por ejemplo `iris_mlp_22semillas.csv` y `brisc_vgg_128_24semillas.csv`. Los CSV proceden de ejecuciones en SLURM, pero se copian localmente a `resultados_10semillas/` con nombres estables y sin identificadores internos de trabajos. La carpeta local `resultados_slurm/` queda como zona de trabajo y tampoco se versiona.
 
 ## Experimentos Actuales
 
@@ -39,13 +39,12 @@ Para ver esas capacidades adicionales del código, como regresión, datasets sin
 |-- run_experiments.py              # Entrada principal para lanzar experimentos
 |-- tfm/                            # Paquete con carga de datos, modelos, entrenamiento y métricas
 |-- docs/                           # Notas sobre capacidades adicionales del código
-|-- scripts/                        # Scripts SLURM y análisis auxiliares
-|-- resultados_10semillas/          # Resultados finales curados
+|-- scripts/                        # Scripts de análisis auxiliares
 |-- requirements.txt                # Dependencias Python principales
 `-- .gitignore                      # Archivos locales excluidos de Git
 ```
 
-No se versionan datasets descargados, entornos locales, notebooks exploratorios, cachés de Python, logs de SLURM ni CSV crudos intermedios.
+No se versionan datasets descargados, entornos locales, notebooks exploratorios, cachés de Python, logs de SLURM ni resultados experimentales locales como `resultados_10semillas/`, `resultados_estadisticos/` o `resultados_slurm/`.
 
 ## Instalación
 
@@ -86,7 +85,7 @@ python run_experiments.py \
   --summary-csv exp_mnist_vgg_summary.csv
 ```
 
-Para lanzar los experimentos actuales en SLURM:
+Si se trabaja en un servidor con SLURM, los experimentos pueden lanzarse mediante scripts locales de tipo `scripts/*_slurm.sh`. Esos scripts no se versionan porque dependen de la configuración concreta del servidor. Un ejemplo de uso sería:
 
 ```bash
 sbatch scripts/run_tfm_classic_slurm.sh
@@ -148,3 +147,5 @@ Los scripts auxiliares de `scripts/` incluyen análisis de potencia y pruebas es
 - `test_equivalencia_tost_bootstrap.py`: aplica el análisis de equivalencia TOST/bootstrap usando un margen práctico, por defecto `±0.02` en `f1_macro`.
 
 Wilcoxon evalúa evidencia de diferencia estadística. El análisis TOST/bootstrap evalúa equivalencia práctica dentro de un margen definido. Ambos enfoques se interpretan de forma complementaria.
+
+Por defecto, estos scripts esperan encontrar los CSV experimentales en la carpeta local `resultados_10semillas/`. Si se clona el repositorio en otra máquina, esos CSV deben copiarse desde el servidor de trabajo o regenerarse ejecutando los experimentos.
