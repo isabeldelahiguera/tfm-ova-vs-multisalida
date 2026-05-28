@@ -27,22 +27,44 @@ class MLP(nn.Module):
         return self.layers(x)
 
 
+DEFAULT_VGG_CHANNELS = [32, 64, 128]
+
+
 class VGG(nn.Module):
-    def __init__(self, input_channels: int, output_dim: int, batch_normalization: bool = False):
+    def __init__(
+        self,
+        input_channels: int,
+        output_dim: int,
+        batch_normalization: bool = False,
+        block_channels: Sequence[int] = DEFAULT_VGG_CHANNELS,
+    ):
         super().__init__()
+        config = self._block_config(block_channels)
+        final_channels = int(block_channels[-1])
         self.features = self._make_features(
             input_channels,
-            [32, 32, "M", 64, 64, "M", 128, 128, "M"],
+            config,
             batch_normalization,
         )
         self.classifier = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
-            nn.Linear(128, 128),
+            nn.Linear(final_channels, final_channels),
             nn.ReLU(),
             nn.Dropout(p=0.3),
-            nn.Linear(128, output_dim),
+            nn.Linear(final_channels, output_dim),
         )
+
+    @staticmethod
+    def _block_config(block_channels: Sequence[int]) -> list[int | str]:
+        if len(block_channels) != 3:
+            raise ValueError("VGG block_channels must contain exactly three channel widths")
+        if any(int(channels) <= 0 for channels in block_channels):
+            raise ValueError("VGG block_channels must be positive")
+        config: list[int | str] = []
+        for channels in block_channels:
+            config.extend([int(channels), int(channels), "M"])
+        return config
 
     @staticmethod
     def _make_features(input_channels: int, config: Sequence[int | str], batch_normalization: bool) -> nn.Sequential:
@@ -71,6 +93,7 @@ def build_model(
     batch_norm: bool,
     model_arch: str = "mlp",
     input_shape: tuple[int, ...] | None = None,
+    vgg_channels: Sequence[int] = DEFAULT_VGG_CHANNELS,
 ) -> nn.Module:
     if model_arch == "mlp":
         return MLP([input_dim] + hidden_layers + [output_dim], batch_normalization=batch_norm)
@@ -78,6 +101,11 @@ def build_model(
     if model_arch == "vgg":
         if input_shape is None or len(input_shape) != 3:
             raise ValueError("VGG requires image input with shape (channels, height, width)")
-        return VGG(input_channels=input_shape[0], output_dim=output_dim, batch_normalization=batch_norm)
+        return VGG(
+            input_channels=input_shape[0],
+            output_dim=output_dim,
+            batch_normalization=batch_norm,
+            block_channels=vgg_channels,
+        )
 
     raise ValueError(f"Unsupported model architecture: {model_arch}")

@@ -11,6 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset", type=str, default="synthetic_multiclass")
     parser.add_argument("--model-arch", choices=["mlp", "vgg"], default="mlp")
     parser.add_argument("--hidden-layers", type=int, nargs="+", default=[32, 16])
+    parser.add_argument("--vgg-channels", type=int, nargs=3, default=[32, 64, 128])
     parser.add_argument("--batch-normalization", action="store_true")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=50)

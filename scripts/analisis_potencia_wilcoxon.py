@@ -12,14 +12,14 @@ from scipy.stats import wilcoxon
 DATASETS_POR_DEFECTO = ("iris", "wine", "breast_cancer", "digits", "mnist", "cifar10", "brisc", "tuberculosis")
 DATASETS_MEDICOS = {"brisc", "tb_chest_xray", "tuberculosis"}
 CSV_POR_DEFECTO = {
-    "iris": "resultados_10semillas/iris_mlp_10semillas.csv",
-    "wine": "resultados_10semillas/wine_mlp_10semillas.csv",
-    "breast_cancer": "resultados_10semillas/breast_cancer_mlp_10semillas.csv",
-    "digits": "resultados_10semillas/digits_mlp_10semillas.csv",
-    "mnist": "resultados_10semillas/mnist_vgg_10semillas.csv",
-    "cifar10": "resultados_10semillas/cifar10_vgg_10semillas.csv",
-    "brisc": "resultados_10semillas/brisc_vgg_128_10semillas.csv",
-    "tuberculosis": "resultados_10semillas/tuberculosis_vgg_128_10semillas.csv",
+    "iris": "resultados_actualizados/secuencial/exp_iris_mlp_138892.csv",
+    "wine": "resultados_actualizados/secuencial/exp_wine_mlp_138892.csv",
+    "breast_cancer": "resultados_actualizados/secuencial/exp_breast_cancer_mlp_138892.csv",
+    "digits": "resultados_actualizados/secuencial/exp_digits_mlp_138892.csv",
+    "mnist": "resultados_actualizados/secuencial/exp_mnist_vgg_138893.csv",
+    "cifar10": "resultados_actualizados/secuencial/exp_cifar10_vgg_138894.csv",
+    "brisc": "resultados_actualizados/secuencial/exp_brisc_vgg_128_139535.csv",
+    "tuberculosis": "resultados_actualizados/secuencial/exp_tb_chest_xray_vgg_128_139536.csv",
 }
 
 
@@ -38,7 +38,7 @@ def crear_parser() -> argparse.ArgumentParser:
         nargs="*",
         help=(
             "Ficheros CSV detallados del experimento. Si se omiten, se usan los últimos "
-            "CSV configurados en resultados_10semillas."
+            "CSV configurados en resultados_actualizados/secuencial."
         ),
     )
     parser.add_argument(
@@ -236,7 +236,10 @@ def main() -> None:
     rutas_csv = [Path(ruta) for ruta in args.csv] if args.csv else rutas_csv_por_defecto()
 
     if not rutas_csv:
-        raise SystemExit("No se han indicado CSV y no se han encontrado CSV por defecto en resultados_10semillas.")
+        raise SystemExit(
+            "No se han indicado CSV y no se han encontrado CSV por defecto en "
+            "resultados_actualizados/secuencial."
+        )
     if args.min_semillas < 2:
         raise ValueError("--min-semillas debe ser al menos 2.")
     if args.max_semillas < args.min_semillas:

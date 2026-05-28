@@ -36,6 +36,8 @@ resultados_clasificacion/
 # Local agent/editor state
 .agents/
 .codex/
+.cache/
+.vscode/
 
 # Legacy/local files
 slurm_logs/
@@ -51,3 +53,4 @@ scripts/*_slurm.sh
 # Statistical results
 resultados_estadisticos/
 resultados_10semillas/
+resultados_actualizados/

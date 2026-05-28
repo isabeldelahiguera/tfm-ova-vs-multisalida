@@ -9,14 +9,14 @@ from scipy.stats import wilcoxon
 
 
 CSV_POR_DEFECTO = [
-    "resultados_10semillas/iris_mlp_22semillas.csv",
-    "resultados_10semillas/wine_mlp_10semillas.csv",
-    "resultados_10semillas/breast_cancer_mlp_10semillas.csv",
-    "resultados_10semillas/digits_mlp_10semillas.csv",
-    "resultados_10semillas/mnist_vgg_10semillas.csv",
-    "resultados_10semillas/cifar10_vgg_10semillas.csv",
-    "resultados_10semillas/brisc_vgg_128_24semillas.csv",
-    "resultados_10semillas/tuberculosis_vgg_128_10semillas.csv",
+    "resultados_actualizados/ampliados/exp_iris_mlp_139551.csv",
+    "resultados_actualizados/secuencial/exp_wine_mlp_138892.csv",
+    "resultados_actualizados/secuencial/exp_breast_cancer_mlp_138892.csv",
+    "resultados_actualizados/secuencial/exp_digits_mlp_138892.csv",
+    "resultados_actualizados/secuencial/exp_mnist_vgg_138893.csv",
+    "resultados_actualizados/secuencial/exp_cifar10_vgg_138894.csv",
+    "resultados_actualizados/ampliados/exp_brisc_vgg_128_139552.csv",
+    "resultados_actualizados/secuencial/exp_tb_chest_xray_vgg_128_139536.csv",
 ]
 
 
@@ -28,7 +28,7 @@ def crear_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Ficheros CSV detallados del experimento. Si se omiten, se usan los CSV "
-            "configurados en resultados_10semillas."
+            "configurados en resultados_actualizados/secuencial."
         ),
     )
     parser.add_argument(
@@ -94,7 +94,17 @@ def ejecutar_wilcoxon(ruta_csv: Path, metrica: str) -> None:
 
 def main() -> None:
     args = crear_parser().parse_args()
-    rutas_csv = [Path(csv_file) for csv_file in args.csv] if args.csv else [Path(csv_file) for csv_file in CSV_POR_DEFECTO]
+    rutas_csv = (
+        [Path(csv_file) for csv_file in args.csv]
+        if args.csv
+        else [Path(csv_file) for csv_file in CSV_POR_DEFECTO if Path(csv_file).exists()]
+    )
+
+    if not rutas_csv:
+        raise SystemExit(
+            "No se han indicado CSV y no se han encontrado CSV por defecto en "
+            "resultados_actualizados/secuencial."
+        )
 
     for ruta_csv in rutas_csv:
         print("=" * 80, flush=True)

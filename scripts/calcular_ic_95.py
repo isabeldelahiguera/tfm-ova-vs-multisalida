@@ -1,16 +1,18 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 
 CSV_FILES = [
-    "resultados_10semillas/iris_mlp_22semillas.csv",
-    "resultados_10semillas/wine_mlp_10semillas.csv",
-    "resultados_10semillas/breast_cancer_mlp_10semillas.csv",
-    "resultados_10semillas/digits_mlp_10semillas.csv",
-    "resultados_10semillas/mnist_vgg_10semillas.csv",
-    "resultados_10semillas/cifar10_vgg_10semillas.csv",
-    "resultados_10semillas/brisc_vgg_128_12semillas.csv",
-    "resultados_10semillas/tuberculosis_vgg_128_10semillas.csv",
+    "resultados_actualizados/secuencial/exp_iris_mlp_138320.csv",
+    "resultados_actualizados/secuencial/exp_wine_mlp_138320.csv",
+    "resultados_actualizados/secuencial/exp_breast_cancer_mlp_138320.csv",
+    "resultados_actualizados/secuencial/exp_digits_mlp_138320.csv",
+    "resultados_actualizados/secuencial/exp_mnist_vgg_138333.csv",
+    "resultados_actualizados/secuencial/exp_cifar10_vgg_138334.csv",
+    "resultados_actualizados/secuencial/exp_brisc_vgg_128_138367.csv",
+    "resultados_actualizados/secuencial/exp_tb_chest_xray_vgg_128_138338.csv",
 ]
 
 
@@ -18,6 +20,9 @@ def main():
     rng = np.random.default_rng(12345)
 
     for csv_file in CSV_FILES:
+        if not Path(csv_file).exists():
+            print(f"Skipping missing CSV: {csv_file}")
+            continue
         df = pd.read_csv(csv_file)
         dataset = df["dataset"].iloc[0]
 

@@ -63,6 +63,7 @@ def build_experiment_model(experiment_data: ExperimentData, args, output_dim: in
         batch_norm=args.batch_normalization,
         model_arch=args.model_arch,
         input_shape=input_shape,
+        vgg_channels=args.vgg_channels,
     )
 
 
@@ -92,6 +93,7 @@ def train_ova_models(experiment_data: ExperimentData, args, device, seed: int):
     start = time.time()
 
     for class_idx in range(experiment_data.target_dim):
+        set_seed(seed)
         print(f"[seed={seed}] Training OVA model {class_idx + 1}/{experiment_data.target_dim}", flush=True)
         y_train_binary = (experiment_data.y_train == class_idx).astype(np.float32)
         y_val_binary = (experiment_data.y_val == class_idx).astype(np.float32)
@@ -101,7 +103,7 @@ def train_ova_models(experiment_data: ExperimentData, args, device, seed: int):
             experiment_data.X_val,
             y_val_binary,
             args.batch_size,
-            seed + class_idx,
+            seed,
             torch.float32,
         )
         model = build_experiment_model(experiment_data, args, 1).to(device)
@@ -217,6 +219,7 @@ def append_shared_metadata(
     training_info: Dict[str, float],
 ) -> Dict[str, object]:
     hidden_layers_value = str(args.hidden_layers) if args.model_arch == "mlp" else "n/a"
+    vgg_channels_value = str(args.vgg_channels) if args.model_arch == "vgg" else "n/a"
     return {
         "task": experiment_data.task_type,
         "dataset": experiment_data.dataset_name,
@@ -224,6 +227,7 @@ def append_shared_metadata(
         "target_dim": experiment_data.target_dim,
         "model_arch": args.model_arch,
         "hidden_layers": hidden_layers_value,
+        "vgg_channels": vgg_channels_value,
         "batch_normalization": args.batch_normalization,
         "batch_size": args.batch_size,
         "epochs": args.epochs,
@@ -242,19 +246,20 @@ def append_shared_metadata(
 def run_classification_experiment(args, experiment_data: ExperimentData, device, seed: int) -> List[Dict[str, object]]:
     results = []
 
-    multi_model, multi_time, multi_training_info = train_multiclass_model(experiment_data, args, device, seed)
-    results.append(
-        append_shared_metadata(
-            evaluate_multiclass_model(multi_model, experiment_data, args, device),
-            args,
-            experiment_data,
-            seed,
-            "multi-output",
-            "coupled_outputs",
-            multi_time,
-            multi_training_info,
+    if "multi-output" in args.coupling_modes:
+        multi_model, multi_time, multi_training_info = train_multiclass_model(experiment_data, args, device, seed)
+        results.append(
+            append_shared_metadata(
+                evaluate_multiclass_model(multi_model, experiment_data, args, device),
+                args,
+                experiment_data,
+                seed,
+                "multi-output",
+                "coupled_outputs",
+                multi_time,
+                multi_training_info,
+            )
         )
-    )
 
     if "ova" in args.coupling_modes:
         ova_models, ova_time, ova_training_info = train_ova_models(experiment_data, args, device, seed)
@@ -341,6 +346,8 @@ def aggregate_results(results_df: pd.DataFrame) -> pd.DataFrame:
             "mae",
             "r2",
             "train_time_seconds",
+            "parallel_train_time_seconds",
+            "ova_model_train_time_seconds_mean",
             "best_val_loss",
             "epochs_trained",
             "total_epochs_trained",
@@ -357,6 +364,7 @@ def aggregate_results(results_df: pd.DataFrame) -> pd.DataFrame:
                 "target_dim",
                 "model_arch",
                 "hidden_layers",
+                "vgg_channels",
                 "batch_normalization",
                 "batch_size",
                 "epochs",
@@ -400,6 +408,9 @@ def validate_args(args) -> None:
 
     if args.model_arch == "vgg" and (args.task != "classification" or args.dataset not in {"mnist", "cifar10", "brisc", "tb_chest_xray"}):
         raise ValueError("model_arch='vgg' is only supported for classification with mnist, cifar10, brisc or tb_chest_xray")
+
+    if any(channels <= 0 for channels in args.vgg_channels):
+        raise ValueError("vgg_channels must be positive")
 
     if args.image_size <= 0:
         raise ValueError("image_size must be greater than 0")
