@@ -5,6 +5,7 @@
 # Python cache/build artifacts
 __pycache__/
 *.py[cod]
+.nfs*
 
 # Local environments
 entornotfm/

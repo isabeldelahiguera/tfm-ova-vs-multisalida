@@ -14,21 +14,65 @@ DEFAULT_DETAIL_CSV = Path(
 DEFAULT_OUTPUT_DIR = Path("resultados_estadisticos")
 MEDICAL_DATASETS = {"brisc", "tb_chest_xray"}
 
-# Casos donde la arquitectura reducida mantiene interés práctico frente a multi-output
-DEFAULT_COMPARISONS = {
-    "wine": "OVA [16, 8]",
-    "breast_cancer": "OVA [16, 8]",
-    "digits": "OVA [16, 8]",
-    "mnist": "OVA [16, 32, 64]", # por simplicidad
-    "tb_chest_xray": "OVA [16, 32, 64]",
+SELECTED_CONFIGS = {
+    "iris": {
+        "label": "OVA [32,16] bs32",
+        "source": "detail",
+        "approach_architecture": "OVA [32, 16]",
+    },
+    "wine": {
+        "label": "OVA [16,8] bs32",
+        "source": "detail",
+        "approach_architecture": "OVA [16, 8]",
+    },
+    "breast_cancer": {
+        "label": "OVA [16,8] bs64",
+        "source": Path(
+            "resultados_actualizados/paralelo/ova_bc_parallel_h16_8_bs64/"
+            "exp_breast_cancer_mlp_parallel_ova.csv"
+        ),
+    },
+    "digits": {
+        "label": "OVA [32,16] bs64",
+        "source": Path(
+            "resultados_actualizados/paralelo/ova_digits_mlp32_16_bs64_lr1e3_pat10_ep50/"
+            "exp_digits_mlp_parallel_ova.csv"
+        ),
+    },
+    "mnist": {
+        "label": "OVA [32,64,128] bs128",
+        "source": Path(
+            "resultados_actualizados/paralelo/ova_vgg32_64_128_bs128_lr1e3_pat10_ep50/"
+            "exp_mnist_vgg_parallel_ova.csv"
+        ),
+    },
+    "cifar10": {
+        "label": "OVA [32,64,128] bs128",
+        "source": Path(
+            "resultados_actualizados/paralelo/ova_vgg32_64_128_bs128_lr1e3_pat10_ep50/"
+            "exp_cifar10_vgg_parallel_ova.csv"
+        ),
+    },
+    "tb_chest_xray": {
+        "label": "OVA [16,32,64] bs32",
+        "source": Path(
+            "resultados_actualizados/paralelo/ova_parallel_reducida_vgg_16_32_64/"
+            "exp_tb_chest_xray_vgg_parallel_ova.csv"
+        ),
+    },
+    "brisc": {
+        "label": "OVA [32,64,128] bs32",
+        "source": "detail",
+        "approach_architecture": "OVA [32, 64, 128]",
+    },
 }
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Analisis estadístico complementario para OVA reducido frente a "
-            "multi-output de referencia."
+            "Analisis estadistico complementario para las configuraciones "
+            "One-vs-All seleccionadas frente al multi-output de referencia."
         )
     )
     parser.add_argument("--csv", type=Path, default=DEFAULT_DETAIL_CSV)
@@ -51,10 +95,23 @@ def potencia_objetivo(dataset: str) -> float:
     return 0.90 if dataset in MEDICAL_DATASETS else 0.80
 
 
-def paired_values(
+def multi_reference(df: pd.DataFrame, dataset: str, metric: str) -> pd.DataFrame:
+    required = {"dataset", "seed", "model_type", metric}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Faltan columnas necesarias: {sorted(missing)}")
+
+    subset = df[(df["dataset"] == dataset) & (df["model_type"] == "multi-output")]
+    if subset.empty:
+        raise ValueError(f"No hay multi-output de referencia para {dataset}")
+
+    return subset[["seed", metric]].rename(columns={metric: "multi-output referencia"})
+
+
+def selected_ova_from_detail(
     df: pd.DataFrame,
     dataset: str,
-    reduced_architecture: str,
+    approach_architecture: str,
     metric: str,
 ) -> pd.DataFrame:
     required = {"dataset", "seed", "approach_architecture", metric}
@@ -64,25 +121,51 @@ def paired_values(
 
     subset = df[
         (df["dataset"] == dataset)
-        & df["approach_architecture"].isin(["multi-output [32, 16]", "multi-output [32, 64, 128]", reduced_architecture])
-    ].copy()
+        & (df["approach_architecture"] == approach_architecture)
+    ]
     if subset.empty:
-        raise ValueError(f"No hay filas para dataset={dataset} y arquitectura={reduced_architecture}")
+        raise ValueError(
+            f"No hay filas para dataset={dataset} y arquitectura={approach_architecture}"
+        )
 
-    wide = subset.pivot_table(
-        index="seed",
-        columns="approach_architecture",
-        values=metric,
-        aggfunc="mean",
-    )
-    multi_columns = [column for column in wide.columns if str(column).startswith("multi-output")]
-    if len(multi_columns) != 1:
-        raise ValueError(f"Se esperaba una unica arquitectura multi-output para {dataset}: {multi_columns}")
-    if reduced_architecture not in wide.columns:
-        raise ValueError(f"No esta {reduced_architecture!r} para {dataset}")
+    return subset[["seed", metric]].rename(columns={metric: "OVA seleccionada"})
 
-    paired = wide[[multi_columns[0], reduced_architecture]].dropna().sort_index()
-    paired.columns = ["multi-output referencia", "OVA reducido"]
+
+def selected_ova_from_file(path: Path, metric: str) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    df = pd.read_csv(path)
+    required = {"seed", metric}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Faltan columnas necesarias en {path}: {sorted(missing)}")
+
+    selected = df[pd.to_numeric(df["seed"], errors="coerce").notna()].copy()
+    selected["seed"] = selected["seed"].astype(int)
+    return selected[["seed", metric]].rename(columns={metric: "OVA seleccionada"})
+
+
+def paired_values(
+    detail: pd.DataFrame,
+    dataset: str,
+    spec: dict[str, object],
+    metric: str,
+) -> pd.DataFrame:
+    multi = multi_reference(detail, dataset, metric)
+    source = spec["source"]
+
+    if source == "detail":
+        selected = selected_ova_from_detail(
+            detail,
+            dataset,
+            str(spec["approach_architecture"]),
+            metric,
+        )
+    else:
+        selected = selected_ova_from_file(Path(source), metric)
+
+    paired = multi.merge(selected, on="seed", how="inner").sort_values("seed")
     if paired.empty:
         raise ValueError(f"No hay semillas pareadas para {dataset}")
     return paired
@@ -153,7 +236,14 @@ def required_seeds_wilcoxon(
 ) -> tuple[int | None, float]:
     last_power = 0.0
     for n_seeds in range(min_seeds, max_seeds + 1):
-        last_power = wilcoxon_power(diffs, n_seeds, relevant_diff, alpha, simulations, rng)
+        last_power = wilcoxon_power(
+            diffs,
+            n_seeds,
+            relevant_diff,
+            alpha,
+            simulations,
+            rng,
+        )
         if last_power >= target_power:
             return n_seeds, last_power
     return None, last_power
@@ -190,7 +280,7 @@ def required_seeds_tost(
 
 def run_observed_tests(
     dataset: str,
-    architecture: str,
+    label: str,
     paired: pd.DataFrame,
     metric: str,
     margin: float,
@@ -198,10 +288,10 @@ def run_observed_tests(
     bootstrap_replicas: int,
     rng: np.random.Generator,
 ) -> dict[str, object]:
-    diffs = paired["OVA reducido"] - paired["multi-output referencia"]
+    diffs = paired["OVA seleccionada"] - paired["multi-output referencia"]
     try:
         wilcoxon_result = wilcoxon(
-            paired["OVA reducido"],
+            paired["OVA seleccionada"],
             paired["multi-output referencia"],
             alternative="two-sided",
             zero_method="wilcox",
@@ -218,18 +308,21 @@ def run_observed_tests(
         bootstrap_replicas,
         rng,
     )
+
     return {
         "dataset": dataset,
-        "comparacion": f"{architecture} - multi-output referencia",
+        "comparacion": f"{label} - multi-output referencia",
         "metrica": metric,
         "semillas_usadas": len(paired),
         "multi_output_media": paired["multi-output referencia"].mean(),
-        "ova_reducido_media": paired["OVA reducido"].mean(),
+        "ova_seleccionada_media": paired["OVA seleccionada"].mean(),
         "diferencia_media": diffs.mean(),
         "diferencia_mediana": diffs.median(),
         "wilcoxon_stat": wilcoxon_stat,
         "wilcoxon_p": wilcoxon_p,
-        "wilcoxon_rechaza_h0_005": bool(wilcoxon_p < 0.05) if not np.isnan(wilcoxon_p) else False,
+        "wilcoxon_rechaza_h0_005": bool(wilcoxon_p < 0.05)
+        if not np.isnan(wilcoxon_p)
+        else False,
         "margen_equivalencia": margin,
         "ic_bootstrap_90_mediana_bajo": ci_low,
         "ic_bootstrap_90_mediana_alto": ci_high,
@@ -244,7 +337,7 @@ def main() -> None:
     if abs(args.dif_verdadera) >= args.margen:
         raise ValueError("--dif-verdadera debe estar dentro del margen")
 
-    df = pd.read_csv(args.csv)
+    detail = pd.read_csv(args.csv)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.semilla_rng)
 
@@ -252,14 +345,19 @@ def main() -> None:
     wilcoxon_power_rows = []
     tost_power_rows = []
 
-    for dataset, architecture in DEFAULT_COMPARISONS.items():
-        paired = paired_values(df, dataset, architecture, args.metrica)
-        diffs = (paired["OVA reducido"] - paired["multi-output referencia"]).to_numpy(dtype=float)
+    for dataset, spec in SELECTED_CONFIGS.items():
+        paired = paired_values(detail, dataset, spec, args.metrica)
+        diffs = (
+            paired["OVA seleccionada"] - paired["multi-output referencia"]
+        ).to_numpy(dtype=float)
         target_power = potencia_objetivo(dataset)
+        label = str(spec["label"])
+        comparison = f"{label} - multi-output referencia"
+
         observed_rows.append(
             run_observed_tests(
                 dataset,
-                architecture,
+                label,
                 paired,
                 args.metrica,
                 args.margen,
@@ -282,12 +380,14 @@ def main() -> None:
         wilcoxon_power_rows.append(
             {
                 "dataset": dataset,
-                "comparacion": f"{architecture} - multi-output referencia",
+                "comparacion": comparison,
                 "metrica": args.metrica,
                 "dif_relevante_simulada": args.dif_relevante,
                 "alpha": args.alpha,
                 "potencia_objetivo": target_power,
-                "semillas_necesarias": wilcoxon_seeds if wilcoxon_seeds is not None else f">{args.max_semillas}",
+                "semillas_necesarias": wilcoxon_seeds
+                if wilcoxon_seeds is not None
+                else f">{args.max_semillas}",
                 "potencia_estimada": wilcoxon_power_value,
             }
         )
@@ -307,13 +407,15 @@ def main() -> None:
         tost_power_rows.append(
             {
                 "dataset": dataset,
-                "comparacion": f"{architecture} - multi-output referencia",
+                "comparacion": comparison,
                 "metrica": args.metrica,
                 "margen_equivalencia": args.margen,
                 "dif_verdadera_simulada": args.dif_verdadera,
                 "alpha": args.alpha,
                 "potencia_objetivo": target_power,
-                "semillas_necesarias": tost_seeds if tost_seeds is not None else f">{args.max_semillas}",
+                "semillas_necesarias": tost_seeds
+                if tost_seeds is not None
+                else f">{args.max_semillas}",
                 "potencia_estimada": tost_power_value,
             }
         )
@@ -322,9 +424,12 @@ def main() -> None:
     wilcoxon_power_df = pd.DataFrame(wilcoxon_power_rows)
     tost_power_df = pd.DataFrame(tost_power_rows)
 
-    observed_path = args.output_dir / "test_arquitecturas_reducidas.csv"
-    wilcoxon_power_path = args.output_dir / "potencia_wilcoxon_arquitecturas_reducidas.csv"
-    tost_power_path = args.output_dir / "potencia_tost_arquitecturas_reducidas.csv"
+    observed_path = args.output_dir / "test_configuraciones_seleccionadas.csv"
+    wilcoxon_power_path = (
+        args.output_dir / "potencia_wilcoxon_configuraciones_seleccionadas.csv"
+    )
+    tost_power_path = args.output_dir / "potencia_tost_configuraciones_seleccionadas.csv"
+
     observed.to_csv(observed_path, index=False)
     wilcoxon_power_df.to_csv(wilcoxon_power_path, index=False)
     tost_power_df.to_csv(tost_power_path, index=False)
@@ -335,9 +440,19 @@ def main() -> None:
     print("Tests observados:")
     print(observed.to_string(index=False, float_format=lambda value: f"{value:.6f}"))
     print("\nPotencia Wilcoxon:")
-    print(wilcoxon_power_df.to_string(index=False, float_format=lambda value: f"{value:.6f}"))
+    print(
+        wilcoxon_power_df.to_string(
+            index=False,
+            float_format=lambda value: f"{value:.6f}",
+        )
+    )
     print("\nPotencia TOST/bootstrap:")
-    print(tost_power_df.to_string(index=False, float_format=lambda value: f"{value:.6f}"))
+    print(
+        tost_power_df.to_string(
+            index=False,
+            float_format=lambda value: f"{value:.6f}",
+        )
+    )
 
 
 if __name__ == "__main__":

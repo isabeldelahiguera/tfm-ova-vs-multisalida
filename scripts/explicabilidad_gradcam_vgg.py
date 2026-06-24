@@ -3,15 +3,25 @@ from __future__ import annotations
 import argparse
 import csv
 import copy
+import os
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Sequence
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 import numpy as np
 import torch
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
+from pytorch_grad_cam import GradCAM, GradCAMPlusPlus
+from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+from skimage.measure import regionprops
+from skimage.morphology import binary_dilation, disk
+from sklearn.metrics import f1_score, jaccard_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
 from torch import nn
 
+from checkpoint_utils import checkpoints_exist, load_model_checkpoints, save_model_checkpoints
 from tfm.data import load_experiment_data
 from tfm.experiment import train_multiclass_model, train_ova_models
 from tfm.training import set_seed
@@ -20,6 +30,7 @@ from tfm.training import set_seed
 CLASS_LABELS = {
     "brisc": ["glioma", "meningioma", "pituitary", "no_tumor"],
     "tb_chest_xray": ["normal", "tuberculosis"],
+    "ham10000": ["akiec", "bcc", "bkl", "df", "mel", "nv", "vasc"],
 }
 
 
@@ -27,10 +38,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate Grad-CAM comparisons for VGG multi-output and OVA models."
     )
-    parser.add_argument("--dataset", choices=["brisc", "tb_chest_xray"], required=True)
+    parser.add_argument("--dataset", choices=["brisc", "tb_chest_xray", "ham10000"], required=True)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--num-images", type=int, default=8)
     parser.add_argument("--image-indices", type=int, nargs="*", default=None)
+    parser.add_argument(
+        "--reference-image-csv",
+        default="",
+        help=(
+            "Optional CSV with an image_path or image_file column. If provided, "
+            "CAMs are generated for those matching test images before applying "
+            "the automatic selection strategy."
+        ),
+    )
     parser.add_argument(
         "--selection",
         choices=["all", "balanced", "ordered", "contrast", "outcomes"],
@@ -47,9 +67,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cam-method",
-        choices=["gradcam", "gradcam++", "rise"],
+        choices=["gradcam", "gradcam++"],
         default="gradcam",
         help="Class activation mapping method used to generate heatmaps.",
+    )
+    parser.add_argument(
+        "--heatmap-color",
+        choices=["red", "blue"],
+        default="red",
+        help="Color used for the CAM overlay in saved PNG panels.",
     )
     parser.add_argument(
         "--target-layer",
@@ -70,25 +96,97 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also save a panel with Grad-CAM maps for every OVA binary model.",
     )
     parser.add_argument(
+        "--include-ova-rgb-overlay",
+        action="store_true",
+        help="Save one RGB overlay combining every OVA class CAM in a different color.",
+    )
+    parser.add_argument(
         "--include-all-class-metrics",
         action="store_true",
         help="Also compute Grad-CAM metrics for every class/logit in multi-output and OVA.",
     )
     parser.add_argument("--output-dir", default="resultados_actualizados/explicabilidad")
-    parser.add_argument("--vgg-channels", type=int, nargs=3, default=[32, 64, 128])
+    parser.add_argument("--run-tag", default="")
+    parser.add_argument("--checkpoint-dir", default="")
+    parser.add_argument("--checkpoint-run-tag", default="")
+    parser.add_argument("--save-checkpoints", action="store_true")
+    parser.add_argument("--reuse-checkpoints", action="store_true")
+    parser.add_argument(
+        "--checkpoint-only",
+        action="store_true",
+        help="Train/load models and write checkpoints/metadata, then skip CAM generation.",
+    )
+    parser.add_argument(
+        "--model-arch",
+        choices=["vgg", "vgg16-pretrained", "vit-b-16-pretrained"],
+        default="vgg",
+    )
+    parser.add_argument("--vgg-channels", type=int, nargs="+", default=[32, 64, 128])
+    parser.add_argument("--class-weighting", choices=["none", "balanced"], default="none")
+    parser.add_argument("--data-augmentation", choices=["none", "ham10000-basic"], default="none")
+    parser.add_argument("--train-sampler", choices=["none", "balanced"], default="none")
+    parser.add_argument(
+        "--pretrained-finetune",
+        choices=["frozen", "block5", "last-block", "full"],
+        default="frozen",
+    )
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--early-stopping-patience", type=int, default=10)
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--image-size", type=int, default=128)
-    parser.add_argument("--rise-samples", type=int, default=200)
-    parser.add_argument("--rise-mask-size", type=int, default=8)
-    parser.add_argument("--rise-prob", type=float, default=0.5)
-    parser.add_argument("--rise-batch-size", type=int, default=64)
+    parser.add_argument(
+        "--cam-top-percents",
+        type=int,
+        nargs="+",
+        default=[5, 10, 15, 20],
+        help=(
+            "Fixed percentages of hottest CAM pixels to compare against the mask. "
+            "Use values in (0, 100), for example: 5 10 15 20."
+        ),
+    )
+    parser.add_argument(
+        "--cam-mask-area-factors",
+        type=float,
+        nargs="+",
+        default=[1.0, 2.0],
+        help=(
+            "Adaptive CAM areas expressed as multiples of the tumor mask area. "
+            "Defaults to 1x and 2x the mask area."
+        ),
+    )
+    parser.add_argument(
+        "--peritumor-radii",
+        type=int,
+        nargs="+",
+        default=[5],
+        help=(
+            "Peritumor dilation radii used for zone metrics. "
+            "Use '5 10 15' to match the BRISC shortcut analysis."
+        ),
+    )
     parser.add_argument("--brisc-root", default="/mnt/homeGPU/imhiguera/data/brisc2025")
     parser.add_argument("--brisc-segmentation-root", default="/mnt/homeGPU/imhiguera/data/brisc2025_segmentation")
     parser.add_argument("--tb-root", default="/mnt/homeGPU/imhiguera/data/tb_chest_xray")
+    parser.add_argument("--ham10000-root", default="/mnt/homeGPU/imhiguera/data/ham10000")
+    parser.add_argument("--ham10000-test", choices=["internal", "official"], default="internal")
+    parser.add_argument("--ham10000-split-csv", default=None)
+    parser.add_argument("--ham10000-split-seed", type=int, default=2000)
+    parser.add_argument("--ham10000-exclude-classes", type=str, nargs="*", default=[])
+    parser.add_argument(
+        "--ham10000-label-mode",
+        choices=["original", "malignant_binary"],
+        default="original",
+        help=(
+            "HAM10000 label formulation. 'malignant_binary' evaluates the "
+            "first level of the nested experiment: malignant vs non_malignant."
+        ),
+    )
+    parser.add_argument(
+        "--ham10000-mask-root",
+        default="/mnt/homeGPU/imhiguera/data/ham10000/masks/HAM10000_segmentations_lesion_tschandl",
+    )
     parser.add_argument("--require-mask", action="store_true")
     parser.add_argument("--max-train", type=int, default=None)
     parser.add_argument("--max-test", type=int, default=None)
@@ -99,7 +197,7 @@ def experiment_args(parsed: argparse.Namespace) -> SimpleNamespace:
     return SimpleNamespace(
         task="classification",
         dataset=parsed.dataset,
-        model_arch="vgg",
+        model_arch=parsed.model_arch,
         hidden_layers=[32, 16],
         vgg_channels=parsed.vgg_channels,
         batch_normalization=False,
@@ -111,6 +209,11 @@ def experiment_args(parsed: argparse.Namespace) -> SimpleNamespace:
         seed=parsed.seed,
         seeds=[parsed.seed],
         coupling_modes=["multi-output", "ova"],
+        class_weighting=parsed.class_weighting,
+        data_augmentation=parsed.data_augmentation,
+        train_sampler=parsed.train_sampler,
+        pretrained_finetune=parsed.pretrained_finetune,
+        ova_calibration="none",
         synthetic_samples=600,
         synthetic_features=20,
         synthetic_classes=4,
@@ -120,6 +223,12 @@ def experiment_args(parsed: argparse.Namespace) -> SimpleNamespace:
         max_test=parsed.max_test if parsed.max_test and parsed.max_test > 0 else None,
         brisc_root=parsed.brisc_root,
         tb_root=parsed.tb_root,
+        ham10000_root=parsed.ham10000_root,
+        ham10000_test=parsed.ham10000_test,
+        ham10000_split_csv=parsed.ham10000_split_csv,
+        ham10000_split_seed=parsed.ham10000_split_seed,
+        ham10000_exclude_classes=parsed.ham10000_exclude_classes,
+        ham10000_label_mode=parsed.ham10000_label_mode,
         image_size=parsed.image_size,
     )
 
@@ -164,6 +273,39 @@ def target_conv_layer(model: nn.Module, layer_spec: str) -> tuple[str, nn.Module
         ) from exc
 
 
+def vit_reshape_transform(tensor: torch.Tensor) -> torch.Tensor:
+    # Torchvision ViT uses one class token followed by a 14x14 patch grid for 224x224 inputs.
+    if tensor.ndim != 3:
+        raise ValueError(f"Expected ViT token tensor with shape (B, tokens, C), got {tuple(tensor.shape)}")
+    patch_tokens = tensor[:, 1:, :]
+    grid_size = int(patch_tokens.shape[1] ** 0.5)
+    if grid_size * grid_size != patch_tokens.shape[1]:
+        raise ValueError(f"Cannot reshape {patch_tokens.shape[1]} ViT patch tokens into a square grid")
+    return patch_tokens.reshape(tensor.shape[0], grid_size, grid_size, tensor.shape[2]).permute(0, 3, 1, 2)
+
+
+def target_cam_layer(model: nn.Module, layer_spec: str) -> tuple[str, nn.Module, object | None]:
+    modules = dict(model.named_modules())
+    vit_layer_names = (
+        "backbone.encoder.layers.encoder_layer_11.ln_1",
+        "encoder.layers.encoder_layer_11.ln_1",
+    )
+    if layer_spec in {"last", "vit_last"}:
+        for vit_layer_name in vit_layer_names:
+            if vit_layer_name in modules:
+                return vit_layer_name, modules[vit_layer_name], vit_reshape_transform
+    if layer_spec in modules and "backbone.encoder.layers" in layer_spec:
+        return layer_spec, modules[layer_spec], vit_reshape_transform
+
+    try:
+        name, layer = target_conv_layer(model, layer_spec)
+        return name, layer, None
+    except ValueError as conv_error:
+        if layer_spec in modules:
+            return layer_spec, modules[layer_spec], vit_reshape_transform
+        raise conv_error
+
+
 def disable_inplace_relu(model: nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, nn.ReLU):
@@ -179,52 +321,13 @@ def gradcam(
     target_layer: str = "last",
 ) -> np.ndarray:
     model.eval()
-    _layer_name, layer = target_conv_layer(model, target_layer)
-    activations = None
-    gradients = None
-
-    def forward_hook(_module, _inputs, output):
-        nonlocal activations
-        activations = output.detach()
-
-    def backward_hook(_module, _grad_input, grad_output):
-        nonlocal gradients
-        gradients = grad_output[0].detach()
-
-    forward_handle = layer.register_forward_hook(forward_hook)
-    backward_handle = layer.register_full_backward_hook(backward_hook)
-
-    try:
-        tensor = torch.tensor(image[None, ...], dtype=torch.float32, device=device)
-        model.zero_grad(set_to_none=True)
-        output = model(tensor)
-        score = output[:, target_score_index].sum()
-        score.backward()
-    finally:
-        forward_handle.remove()
-        backward_handle.remove()
-
-    if activations is None or gradients is None:
-        raise RuntimeError("Could not collect activations/gradients for Grad-CAM")
-
-    if method == "gradcam++":
-        gradients_pow2 = gradients.pow(2)
-        gradients_pow3 = gradients_pow2 * gradients
-        denominator = 2.0 * gradients_pow2 + (
-            activations * gradients_pow3
-        ).sum(dim=(2, 3), keepdim=True)
-        alphas = gradients_pow2 / (denominator + 1e-8)
-        weights = (alphas * torch.relu(gradients)).sum(dim=(2, 3), keepdim=True)
-    else:
-        weights = gradients.mean(dim=(2, 3), keepdim=True)
-    cam = torch.relu((weights * activations).sum(dim=1)).squeeze(0)
-    cam = cam.cpu().numpy()
-    cam = resize_array(cam, image.shape[-1], image.shape[-2])
-    cam = cam - cam.min()
-    max_value = cam.max()
-    if max_value > 0:
-        cam = cam / max_value
-    return cam
+    _layer_name, layer, reshape_transform = target_cam_layer(model, target_layer)
+    cam_class = GradCAMPlusPlus if method == "gradcam++" else GradCAM
+    tensor = torch.tensor(image[None, ...], dtype=torch.float32, device=device)
+    targets = [ClassifierOutputTarget(target_score_index)]
+    with cam_class(model=model, target_layers=[layer], reshape_transform=reshape_transform) as cam_generator:
+        grayscale_cam = cam_generator(input_tensor=tensor, targets=targets)[0]
+    return np.asarray(grayscale_cam, dtype=np.float32)
 
 
 def resize_array(array: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -233,95 +336,13 @@ def resize_array(array: np.ndarray, width: int, height: int) -> np.ndarray:
     return np.asarray(image, dtype=np.float32) / 255.0
 
 
-def random_rise_masks(
-    num_masks: int,
-    mask_size: int,
-    image_height: int,
-    image_width: int,
-    probability: float,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    masks = rng.random((num_masks, mask_size, mask_size)) < probability
-    resized_masks = []
-    for mask in masks:
-        mask_image = Image.fromarray(np.uint8(mask) * 255, mode="L")
-        mask_image = mask_image.resize((image_width, image_height), Image.BILINEAR)
-        resized_masks.append(np.asarray(mask_image, dtype=np.float32) / 255.0)
-    return np.stack(resized_masks, axis=0)
-
-
-def rise_cam(
-    model: nn.Module,
-    image: np.ndarray,
-    target_score_index: int,
-    device: torch.device,
-    *,
-    output_kind: str,
-    num_masks: int,
-    mask_size: int,
-    probability: float,
-    batch_size: int,
-    seed: int,
-) -> np.ndarray:
-    model.eval()
-    image_height, image_width = image.shape[-2], image.shape[-1]
-    rng = np.random.default_rng(seed)
-    masks = random_rise_masks(
-        num_masks,
-        mask_size,
-        image_height,
-        image_width,
-        probability,
-        rng,
-    )
-    saliency = np.zeros((image_height, image_width), dtype=np.float32)
-    image_batch = image[None, ...]
-    eps = 1e-8
-
-    with torch.no_grad():
-        for start in range(0, num_masks, batch_size):
-            batch_masks = masks[start : start + batch_size]
-            masked_images = image_batch * batch_masks[:, None, :, :]
-            tensor = torch.tensor(masked_images, dtype=torch.float32, device=device)
-            output = model(tensor)
-            if output_kind == "multi":
-                scores = torch.softmax(output, dim=1)[:, target_score_index]
-            else:
-                scores = torch.sigmoid(output.reshape(output.shape[0], -1)[:, target_score_index])
-            scores_np = scores.detach().cpu().numpy().astype(np.float32)
-            saliency += np.sum(batch_masks * scores_np[:, None, None], axis=0)
-
-    saliency = saliency / (num_masks * probability + eps)
-    saliency = saliency - saliency.min()
-    max_value = saliency.max()
-    if max_value > 0:
-        saliency = saliency / max_value
-    return saliency
-
-
 def compute_cam(
     model: nn.Module,
     image: np.ndarray,
     target_score_index: int,
     device: torch.device,
     parsed: argparse.Namespace,
-    *,
-    output_kind: str,
-    sample_seed: int,
 ) -> np.ndarray:
-    if parsed.cam_method == "rise":
-        return rise_cam(
-            model,
-            image,
-            target_score_index,
-            device,
-            output_kind=output_kind,
-            num_masks=parsed.rise_samples,
-            mask_size=parsed.rise_mask_size,
-            probability=parsed.rise_prob,
-            batch_size=parsed.rise_batch_size,
-            seed=sample_seed,
-        )
     return gradcam(
         model,
         image,
@@ -343,11 +364,15 @@ def image_to_pil(image: np.ndarray) -> Image.Image:
     return Image.fromarray(rgb, mode="RGB")
 
 
-def overlay_heatmap(image: np.ndarray, cam: np.ndarray) -> Image.Image:
+def overlay_heatmap(image: np.ndarray, cam: np.ndarray, color: str = "red") -> Image.Image:
     base = image_to_pil(image).convert("RGBA")
     heat = np.zeros((cam.shape[0], cam.shape[1], 4), dtype=np.uint8)
-    heat[..., 0] = 255
-    heat[..., 1] = np.uint8(120 * cam)
+    if color == "blue":
+        heat[..., 1] = np.uint8(90 * cam)
+        heat[..., 2] = 255
+    else:
+        heat[..., 0] = 255
+        heat[..., 1] = np.uint8(120 * cam)
     heat[..., 3] = np.uint8(170 * cam)
     overlay = Image.fromarray(heat, mode="RGBA")
     return Image.alpha_composite(base, overlay).convert("RGB")
@@ -363,12 +388,10 @@ def load_mask(mask_path: Path | None, width: int, height: int) -> np.ndarray | N
 
 
 def dilate_bool_mask(mask: np.ndarray, radius: int) -> np.ndarray:
+    mask = np.asarray(mask, dtype=bool)
     if radius <= 0:
-        return np.asarray(mask, dtype=bool)
-    size = radius * 2 + 1
-    mask_image = Image.fromarray(np.uint8(mask) * 255, mode="L")
-    dilated = mask_image.filter(ImageFilter.MaxFilter(size=size))
-    return np.asarray(dilated) > 0
+        return mask
+    return binary_dilation(mask, footprint=disk(radius))
 
 
 def mask_to_pil(mask: np.ndarray) -> Image.Image:
@@ -405,15 +428,172 @@ def cam_global_metrics(cam: np.ndarray) -> dict[str, float]:
     }
 
 
-def cam_mask_metrics(cam: np.ndarray, mask: np.ndarray | None) -> dict[str, float]:
+def rankdata_average(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(values.size, dtype=np.float64)
+    sorted_values = values[order]
+    start = 0
+    while start < values.size:
+        end = start + 1
+        while end < values.size and sorted_values[end] == sorted_values[start]:
+            end += 1
+        average_rank = (start + end - 1) / 2.0
+        ranks[order[start:end]] = average_rank
+        start = end
+    return ranks
+
+
+def vector_correlation(first: np.ndarray, second: np.ndarray) -> float:
+    first = np.asarray(first, dtype=np.float64).reshape(-1)
+    second = np.asarray(second, dtype=np.float64).reshape(-1)
+    first_std = float(first.std())
+    second_std = float(second.std())
+    if first_std <= 1e-12 or second_std <= 1e-12:
+        return 0.0
+    return float(np.corrcoef(first, second)[0, 1])
+
+
+def cam_weighted_centroid(cam: np.ndarray) -> tuple[float, float]:
+    cam = np.asarray(cam, dtype=np.float64)
+    total = float(cam.sum())
+    if total <= 1e-12:
+        return ((cam.shape[0] - 1) / 2.0, (cam.shape[1] - 1) / 2.0)
+    yy, xx = np.indices(cam.shape)
+    return float((yy * cam).sum() / total), float((xx * cam).sum() / total)
+
+
+def top_percent_mask(cam: np.ndarray, top_percent: int) -> np.ndarray:
+    if top_percent <= 0 or top_percent >= 100:
+        raise ValueError("top_percent must be between 1 and 99")
+    threshold = float(np.percentile(cam, 100 - top_percent))
+    return np.asarray(cam) >= threshold
+
+
+def binary_iou(first: np.ndarray, second: np.ndarray) -> float:
+    first = np.asarray(first, dtype=bool)
+    second = np.asarray(second, dtype=bool)
+    union = float(np.logical_or(first, second).sum())
+    if union <= 0:
+        return 0.0
+    return float(np.logical_and(first, second).sum() / union)
+
+
+def cam_pair_metrics(
+    multi_cam: np.ndarray,
+    ova_cam: np.ndarray,
+    top_percents: Sequence[int] = (5, 10, 15, 20),
+) -> dict[str, float]:
+    multi_cam = np.asarray(multi_cam, dtype=np.float32)
+    ova_cam = np.asarray(ova_cam, dtype=np.float32)
+    if multi_cam.shape != ova_cam.shape:
+        raise ValueError(f"CAM shapes differ: {multi_cam.shape} vs {ova_cam.shape}")
+
+    multi_flat = multi_cam.reshape(-1)
+    ova_flat = ova_cam.reshape(-1)
+    multi_cy, multi_cx = cam_weighted_centroid(multi_cam)
+    ova_cy, ova_cx = cam_weighted_centroid(ova_cam)
+    diagonal = float(np.hypot(*multi_cam.shape))
+    metrics = {
+        "cam_pearson": vector_correlation(multi_flat, ova_flat),
+        "cam_spearman": vector_correlation(rankdata_average(multi_flat), rankdata_average(ova_flat)),
+        "cam_mean_abs_diff": float(np.mean(np.abs(multi_cam - ova_cam))),
+        "cam_centroid_distance_norm": float(np.hypot(multi_cy - ova_cy, multi_cx - ova_cx) / max(diagonal, 1e-8)),
+        "cam_argmax_distance_norm": 0.0,
+    }
+
+    multi_max_y, multi_max_x = np.unravel_index(int(np.argmax(multi_cam)), multi_cam.shape)
+    ova_max_y, ova_max_x = np.unravel_index(int(np.argmax(ova_cam)), ova_cam.shape)
+    metrics["cam_argmax_distance_norm"] = float(
+        np.hypot(multi_max_y - ova_max_y, multi_max_x - ova_max_x) / max(diagonal, 1e-8)
+    )
+    for top_percent in top_percents:
+        multi_hot = top_percent_mask(multi_cam, top_percent)
+        ova_hot = top_percent_mask(ova_cam, top_percent)
+        metrics[f"cam_top{top_percent}_iou"] = binary_iou(multi_hot, ova_hot)
+    return metrics
+
+
+def format_area_factor(factor: float) -> str:
+    if float(factor).is_integer():
+        value = str(int(factor))
+    else:
+        value = str(factor).replace(".", "p")
+    return "mask_area" if factor == 1.0 else f"{value}x_mask_area"
+
+
+def binary_mask_scores(hot: np.ndarray, mask: np.ndarray) -> dict[str, float]:
+    y_true = np.asarray(mask, dtype=bool).reshape(-1)
+    y_pred = np.asarray(hot, dtype=bool).reshape(-1)
+    return {
+        "iou": float(jaccard_score(y_true, y_pred, zero_division=0)),
+        "dice": float(f1_score(y_true, y_pred, zero_division=0)),
+        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+    }
+
+
+def mask_shape_metrics(mask: np.ndarray) -> dict[str, float]:
+    mask = np.asarray(mask, dtype=bool)
+    regions = regionprops(mask.astype(np.uint8))
+    if not regions:
+        return {}
+    region = regions[0]
+    height, width = mask.shape
+    y_min, x_min, y_max_exclusive, x_max_exclusive = region.bbox
+    bbox_height, bbox_width = region.image.shape
+    bbox_area = float(region.area_bbox)
+    area = float(region.area)
+    center_x = (width - 1) / 2
+    center_y = (height - 1) / 2
+    centroid_y, centroid_x = region.centroid
+    centroid_x = float(centroid_x)
+    centroid_y = float(centroid_y)
+    diagonal = float(np.hypot(width, height))
+    bbox_center_x = (x_min + (x_max_exclusive - 1)) / 2
+    bbox_center_y = (y_min + (y_max_exclusive - 1)) / 2
+    perimeter = float(region.perimeter)
+    compactness = (4 * np.pi * area) / max(1.0, perimeter * perimeter)
+
+    return {
+        "mask_centroid_x_norm": float(centroid_x / max(1, width - 1)),
+        "mask_centroid_y_norm": float(centroid_y / max(1, height - 1)),
+        "mask_centroid_distance_center_norm": float(
+            np.hypot(centroid_x - center_x, centroid_y - center_y) / max(1.0, diagonal)
+        ),
+        "mask_bbox_x_min_norm": float(x_min / max(1, width - 1)),
+        "mask_bbox_y_min_norm": float(y_min / max(1, height - 1)),
+        "mask_bbox_x_max_norm": float((x_max_exclusive - 1) / max(1, width - 1)),
+        "mask_bbox_y_max_norm": float((y_max_exclusive - 1) / max(1, height - 1)),
+        "mask_bbox_center_x_norm": float(bbox_center_x / max(1, width - 1)),
+        "mask_bbox_center_y_norm": float(bbox_center_y / max(1, height - 1)),
+        "mask_bbox_center_distance_center_norm": float(
+            np.hypot(bbox_center_x - center_x, bbox_center_y - center_y) / max(1.0, diagonal)
+        ),
+        "mask_bbox_width_frac": float(bbox_width / width),
+        "mask_bbox_height_frac": float(bbox_height / height),
+        "mask_bbox_area_frac": float(bbox_area / (width * height)),
+        "mask_bbox_aspect_width_height": float(bbox_width / max(1, bbox_height)),
+        "mask_bbox_fill_frac": float(region.extent),
+        "mask_equivalent_diameter_frac": float(region.equivalent_diameter_area / max(width, height)),
+        "mask_perimeter_frac": float(perimeter / max(1, 2 * (width + height))),
+        "mask_compactness": float(compactness),
+    }
+
+
+def cam_mask_metrics(
+    cam: np.ndarray,
+    mask: np.ndarray | None,
+    top_percents: Sequence[int] = (5, 10, 15, 20),
+    mask_area_factors: Sequence[float] = (1.0, 2.0),
+    peritumor_radii: Sequence[int] = (5,),
+) -> dict[str, float]:
     cam = np.asarray(cam, dtype=np.float32)
     metrics = cam_global_metrics(cam)
     if mask is None or not mask.any():
         return metrics
 
     mask = np.asarray(mask, dtype=bool)
-    peritumor = np.logical_and(dilate_bool_mask(mask, radius=5), ~mask)
-    outside_peritumor = ~(mask | peritumor)
     total_activation = float(cam.sum())
     inside_activation = float(cam[mask].sum())
     outside_activation = float(cam[~mask].sum())
@@ -432,11 +612,17 @@ def cam_mask_metrics(cam: np.ndarray, mask: np.ndarray | None) -> dict[str, floa
             "mask_area_frac": mask_area,
         }
     )
-    zone_specs = [
-        ("tumor", mask),
-        ("peritumor_r5", peritumor),
-        ("outside_peritumor_r5", outside_peritumor),
-    ]
+    metrics.update(mask_shape_metrics(mask))
+    zone_specs = [("tumor", mask)]
+    for radius in sorted(set(int(r) for r in peritumor_radii if int(r) >= 0)):
+        peritumor = np.logical_and(dilate_bool_mask(mask, radius=radius), ~mask)
+        outside_peritumor = ~(mask | peritumor)
+        zone_specs.extend(
+            [
+                (f"peritumor_r{radius}", peritumor),
+                (f"outside_peritumor_r{radius}", outside_peritumor),
+            ]
+        )
     for zone_name, zone_mask in zone_specs:
         if zone_mask.any():
             zone_activation = float(cam[zone_mask].sum())
@@ -449,6 +635,19 @@ def cam_mask_metrics(cam: np.ndarray, mask: np.ndarray | None) -> dict[str, floa
         metrics[f"cam_{zone_name}_activation_frac"] = zone_activation / (total_activation + eps)
         metrics[f"cam_{zone_name}_mean"] = zone_mean
         metrics[f"cam_{zone_name}_area_frac"] = zone_area
+
+    for radius in sorted(set(int(r) for r in peritumor_radii if int(r) >= 0)):
+        peritumor_key = f"cam_peritumor_r{radius}_activation_frac"
+        outside_key = f"cam_outside_frac"
+        if peritumor_key in metrics:
+            # Border ring only: dilated mask at radius r minus the original mask.
+            metrics[f"cam_border_r{radius}_activation_frac"] = metrics[peritumor_key]
+            metrics[f"cam_border_r{radius}_outside_share"] = metrics[peritumor_key] / (
+                metrics[outside_key] + eps
+            )
+            metrics[f"cam_lesion_plus_border_r{radius}_activation_frac"] = (
+                metrics["cam_inside_frac"] + metrics[peritumor_key]
+            )
 
     for threshold_label, threshold in (("50", 0.50), ("75", 0.75)):
         active = cam >= threshold
@@ -479,42 +678,37 @@ def cam_mask_metrics(cam: np.ndarray, mask: np.ndarray | None) -> dict[str, floa
     max_y, max_x = np.unravel_index(int(np.argmax(cam)), cam.shape)
     metrics["cam_pointing_game_hit"] = float(mask[max_y, max_x])
 
-    for percentile in (70, 80, 90):
+    for top_percent in top_percents:
+        percentile = 100 - top_percent
         threshold = float(np.percentile(cam, percentile))
         hot = cam >= threshold
-        intersection = float(np.logical_and(hot, mask).sum())
-        union = float(np.logical_or(hot, mask).sum())
-        hot_area = float(hot.sum())
-        mask_area_pixels = float(mask.sum())
-        metrics[f"cam_top{100 - percentile}_iou"] = intersection / (union + eps)
-        metrics[f"cam_top{100 - percentile}_dice"] = (2.0 * intersection) / (
-            hot_area + mask_area_pixels + eps
-        )
-        metrics[f"cam_top{100 - percentile}_precision"] = intersection / (hot_area + eps)
-        metrics[f"cam_top{100 - percentile}_recall"] = intersection / (mask_area_pixels + eps)
-        metrics[f"cam_top{100 - percentile}_outside_precision"] = 1.0 - metrics[
-            f"cam_top{100 - percentile}_precision"
+        scores = binary_mask_scores(hot, mask)
+        metrics[f"cam_top{top_percent}_iou"] = scores["iou"]
+        metrics[f"cam_top{top_percent}_dice"] = scores["dice"]
+        metrics[f"cam_top{top_percent}_precision"] = scores["precision"]
+        metrics[f"cam_top{top_percent}_recall"] = scores["recall"]
+        metrics[f"cam_top{top_percent}_outside_precision"] = 1.0 - metrics[
+            f"cam_top{top_percent}_precision"
         ]
 
+    flat_order = np.argsort(cam.reshape(-1))[::-1]
     mask_area_pixels = int(mask.sum())
-    hot = np.zeros(cam.size, dtype=bool)
-    if mask_area_pixels > 0:
-        flat_order = np.argsort(cam.reshape(-1))[::-1]
-        hot[flat_order[:mask_area_pixels]] = True
-    hot = hot.reshape(cam.shape)
-    intersection = float(np.logical_and(hot, mask).sum())
-    union = float(np.logical_or(hot, mask).sum())
-    hot_area = float(hot.sum())
     mask_area_pixels_float = float(mask.sum())
-    metrics["cam_top_mask_area_iou"] = intersection / (union + eps)
-    metrics["cam_top_mask_area_dice"] = (2.0 * intersection) / (
-        hot_area + mask_area_pixels_float + eps
-    )
-    metrics["cam_top_mask_area_precision"] = intersection / (hot_area + eps)
-    metrics["cam_top_mask_area_recall"] = intersection / (mask_area_pixels_float + eps)
-    metrics["cam_top_mask_area_outside_precision"] = (
-        1.0 - metrics["cam_top_mask_area_precision"]
-    )
+    for area_factor in mask_area_factors:
+        area_label = format_area_factor(float(area_factor))
+        hot_pixels = min(cam.size, max(1, int(round(mask_area_pixels * area_factor))))
+        hot = np.zeros(cam.size, dtype=bool)
+        if mask_area_pixels > 0:
+            hot[flat_order[:hot_pixels]] = True
+        hot = hot.reshape(cam.shape)
+        scores = binary_mask_scores(hot, mask)
+        metrics[f"cam_top_{area_label}_iou"] = scores["iou"]
+        metrics[f"cam_top_{area_label}_dice"] = scores["dice"]
+        metrics[f"cam_top_{area_label}_precision"] = scores["precision"]
+        metrics[f"cam_top_{area_label}_recall"] = scores["recall"]
+        metrics[f"cam_top_{area_label}_outside_precision"] = (
+            1.0 - metrics[f"cam_top_{area_label}_precision"]
+        )
 
     return metrics
 
@@ -547,7 +741,7 @@ def write_metrics_summary(rows: list[dict[str, object]], output_path: Path) -> N
             key
             for row in rows
             for key, value in row.items()
-            if key.startswith(("multi_cam_", "ova_cam_"))
+            if key.startswith(("multi_cam_", "ova_cam_", "multi_ova_cam_"))
             and isinstance(value, (int, float, np.integer, np.floating))
         }
     )
@@ -665,6 +859,8 @@ def make_panel(
     ova_label: str,
     ova_confidence: float,
     mask: np.ndarray | None = None,
+    cam_label: str = "Grad-CAM",
+    heatmap_color_label: str = "Rojo",
 ) -> Image.Image:
     panels = [
         add_title(original, "Original"),
@@ -689,9 +885,9 @@ def make_panel(
         x += panel.width + gap
     header_lines = [f"Real: {true_label}"]
     if mask is not None:
-        header_lines.append("Verde: mascara real | Rojo: activacion Grad-CAM")
+        header_lines.append(f"Verde: mascara real | {heatmap_color_label}: activacion {cam_label}")
     else:
-        header_lines.append("Rojo: activacion Grad-CAM")
+        header_lines.append(f"{heatmap_color_label}: activacion {cam_label}")
     return add_header(canvas, header_lines)
 
 
@@ -705,6 +901,8 @@ def make_all_ova_panel(
     ova_labels: list[str],
     ova_probs: np.ndarray,
     mask: np.ndarray | None = None,
+    cam_label: str = "Grad-CAM",
+    heatmap_color_label: str = "Rojo",
 ) -> Image.Image:
     panels = [add_title(original, "Original")]
     if mask is not None:
@@ -727,9 +925,69 @@ def make_all_ova_panel(
 
     header_lines = [f"Real: {true_label}"]
     if mask is not None:
-        header_lines.append("Verde: mascara real | Rojo: activacion Grad-CAM")
+        header_lines.append(f"Verde: mascara real | {heatmap_color_label}: activacion {cam_label}")
     else:
-        header_lines.append("Rojo: activacion Grad-CAM")
+        header_lines.append(f"{heatmap_color_label}: activacion {cam_label}")
+    return add_header(canvas, header_lines)
+
+
+def make_ova_rgb_overlay(
+    image: np.ndarray,
+    ova_cams: list[np.ndarray],
+    ova_labels: list[str],
+    ova_probs: np.ndarray,
+    true_label: str,
+    mask: np.ndarray | None = None,
+) -> Image.Image:
+    original_rgb = image_to_pil(image)
+    original = original_rgb.convert("RGBA")
+    height, width = ova_cams[0].shape
+    color_table = [
+        (255, 0, 0),    # glioma / class 0
+        (255, 210, 0),  # meningioma / class 1
+        (40, 120, 255), # pituitary / class 2
+        (210, 0, 255),  # no_tumor / class 3
+    ]
+    color_layer = np.zeros((height, width, 4), dtype=np.float32)
+    for class_idx, cam in enumerate(ova_cams):
+        color = np.asarray(color_table[class_idx % len(color_table)], dtype=np.float32)
+        normalized = np.asarray(cam, dtype=np.float32)
+        if normalized.max() > 0:
+            normalized = normalized / normalized.max()
+        alpha = normalized * 165.0
+        color_layer[..., :3] += normalized[..., None] * color
+        color_layer[..., 3] = np.maximum(color_layer[..., 3], alpha)
+
+    color_layer[..., :3] = np.clip(color_layer[..., :3], 0, 255)
+    overlay = Image.fromarray(np.uint8(np.clip(color_layer, 0, 255)), mode="RGBA")
+    combined = Image.alpha_composite(original, overlay).convert("RGB")
+    if mask is not None:
+        combined = overlay_mask(combined, mask, alpha=85)
+        original_rgb = overlay_mask(original_rgb, mask, alpha=85)
+
+    panels = [
+        add_title(original_rgb, "Original + mask" if mask is not None else "Original"),
+        add_title(combined, "OVAs RGB"),
+    ]
+    gap = 8
+    canvas = Image.new(
+        "RGB",
+        (sum(panel.width for panel in panels) + gap, max(panel.height for panel in panels)),
+        "white",
+    )
+    x = 0
+    for panel in panels:
+        canvas.paste(panel, (x, 0))
+        x += panel.width + gap
+
+    probs = {label: float(prob) for label, prob in zip(ova_labels, ova_probs)}
+    header_lines = [
+        f"Real: {true_label}",
+        f"Rojo glioma p={probs.get('glioma', 0.0):.3f} | Amarillo meningioma p={probs.get('meningioma', 0.0):.3f}",
+        f"Azul pituitary p={probs.get('pituitary', 0.0):.3f} | Magenta no_tumor p={probs.get('no_tumor', 0.0):.3f}",
+    ]
+    if mask is not None:
+        header_lines.append("Verde: mascara tumoral")
     return add_header(canvas, header_lines)
 
 
@@ -822,6 +1080,49 @@ def balanced_indices(
                     break
         if not added:
             break
+    return selected
+
+
+def reference_image_indices(
+    reference_csv: str,
+    image_paths: Sequence[Path | None],
+    allowed_indices: set[int] | None = None,
+) -> list[int]:
+    if not reference_csv:
+        return []
+
+    reference_path = Path(reference_csv)
+    if not reference_path.exists():
+        raise FileNotFoundError(f"Reference image CSV not found: {reference_csv}")
+
+    wanted_paths: set[str] = set()
+    wanted_names: set[str] = set()
+    with reference_path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = set(reader.fieldnames or [])
+        path_column = "image_path" if "image_path" in fieldnames else None
+        file_column = "image_file" if "image_file" in fieldnames else None
+        if path_column is None and file_column is None:
+            raise ValueError(
+                "Reference image CSV must contain either an image_path or image_file column."
+            )
+        for row in reader:
+            if path_column and row.get(path_column):
+                path = Path(row[path_column])
+                wanted_paths.add(str(path))
+                wanted_names.add(path.name)
+            if file_column and row.get(file_column):
+                wanted_names.add(Path(row[file_column]).name)
+
+    selected: list[int] = []
+    for idx, path in enumerate(image_paths):
+        if allowed_indices is not None and idx not in allowed_indices:
+            continue
+        if path is None:
+            continue
+        path_obj = Path(path)
+        if str(path_obj) in wanted_paths or path_obj.name in wanted_names:
+            selected.append(idx)
     return selected
 
 
@@ -1002,11 +1303,17 @@ def tb_test_paths(tb_root: str | Path, seed: int) -> list[Path]:
     return list(test_paths)
 
 
-def test_image_paths(parsed: argparse.Namespace, expected_len: int) -> list[Path | None]:
+def test_image_paths(
+    parsed: argparse.Namespace,
+    expected_len: int,
+    experiment_data=None,
+) -> list[Path | None]:
     if parsed.dataset == "brisc":
         paths = brisc_test_paths(parsed.brisc_root, parsed.max_test if parsed.max_test and parsed.max_test > 0 else None)
     elif parsed.dataset == "tb_chest_xray":
         paths = tb_test_paths(parsed.tb_root, parsed.seed)
+    elif parsed.dataset == "ham10000" and experiment_data is not None:
+        paths = [Path(path) for path in getattr(experiment_data, "test_image_paths", [])]
     else:
         paths = []
 
@@ -1026,12 +1333,34 @@ def brisc_mask_path(parsed: argparse.Namespace, image_path: Path | None) -> Path
     return mask_path if mask_path.exists() else None
 
 
+def ham10000_mask_path(parsed: argparse.Namespace, image_path: Path | None) -> Path | None:
+    if parsed.dataset != "ham10000" or image_path is None:
+        return None
+    mask_path = Path(parsed.ham10000_mask_root).expanduser() / f"{image_path.stem}_segmentation.png"
+    return mask_path if mask_path.exists() else None
+
+
+def segmentation_mask_path(parsed: argparse.Namespace, image_path: Path | None) -> Path | None:
+    if parsed.dataset == "brisc":
+        return brisc_mask_path(parsed, image_path)
+    if parsed.dataset == "ham10000":
+        return ham10000_mask_path(parsed, image_path)
+    return None
+
+
 def main() -> None:
     parsed = build_parser().parse_args()
+    if any(percent <= 0 or percent >= 100 for percent in parsed.cam_top_percents):
+        raise ValueError("--cam-top-percents values must be between 1 and 99.")
+    if any(factor <= 0 for factor in parsed.cam_mask_area_factors):
+        raise ValueError("--cam-mask-area-factors values must be positive.")
+
     args = experiment_args(parsed)
     set_seed(parsed.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     base_seed_dir = f"seed_{parsed.seed}"
+    if parsed.run_tag:
+        base_seed_dir = f"{base_seed_dir}_{parsed.run_tag}"
     if parsed.cam_target == "true":
         base_seed_dir = f"{base_seed_dir}_true_target"
 
@@ -1042,21 +1371,37 @@ def main() -> None:
         f"val={len(experiment_data.y_val)}, test={len(experiment_data.y_test)}",
         flush=True,
     )
-    multi_model, _, _ = train_multiclass_model(experiment_data, args, device, parsed.seed)
-    ova_models, _, _ = train_ova_models(experiment_data, args, device, parsed.seed)
+    if parsed.reuse_checkpoints and checkpoints_exist(parsed, experiment_data.target_dim):
+        multi_model, ova_models = load_model_checkpoints(parsed, experiment_data, device, experiment_args)
+    else:
+        multi_model, _, multi_training_info = train_multiclass_model(experiment_data, args, device, parsed.seed)
+        ova_models, _, ova_training_info = train_ova_models(experiment_data, args, device, parsed.seed)
+        if parsed.save_checkpoints or parsed.reuse_checkpoints:
+            save_model_checkpoints(
+                parsed,
+                experiment_data,
+                multi_model,
+                ova_models,
+                multi_training_info,
+                ova_training_info,
+                device,
+                args,
+            )
+
+    if parsed.checkpoint_only:
+        print("CHECKPOINT_ONLY=1, skipping CAM generation.", flush=True)
+        return
+
     gradcam_multi_model = copy.deepcopy(multi_model).to(device)
     gradcam_ova_models = [copy.deepcopy(model).to(device) for model in ova_models]
     disable_inplace_relu(gradcam_multi_model)
     for model in gradcam_ova_models:
         disable_inplace_relu(model)
 
-    if parsed.cam_method == "rise":
-        resolved_layer_name = ""
-    else:
-        resolved_layer_name, _resolved_layer = target_conv_layer(
-            gradcam_multi_model,
-            parsed.target_layer,
-        )
+    resolved_layer_name, _resolved_layer, _reshape_transform = target_cam_layer(
+        gradcam_multi_model,
+        parsed.target_layer,
+    )
     seed_dir = cam_output_dir_name(parsed, base_seed_dir, resolved_layer_name)
     output_dir = Path(parsed.output_dir) / parsed.dataset / seed_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1065,17 +1410,13 @@ def main() -> None:
         f"({resolved_layer_name}), save_images={not parsed.no_save_images}",
         flush=True,
     )
-    if parsed.cam_method == "rise":
-        print(
-            f"RISE samples={parsed.rise_samples}, mask_size={parsed.rise_mask_size}, "
-            f"prob={parsed.rise_prob}, batch_size={parsed.rise_batch_size}",
-            flush=True,
-        )
+    cam_label = "Grad-CAM++" if parsed.cam_method == "gradcam++" else "Grad-CAM"
+    heatmap_color_label = "Azul" if parsed.heatmap_color == "blue" else "Rojo"
 
     X_test = experiment_data.X_test
     y_true = experiment_data.y_test
-    image_paths = test_image_paths(parsed, len(y_true))
-    mask_paths = [brisc_mask_path(parsed, path) for path in image_paths]
+    image_paths = test_image_paths(parsed, len(y_true), experiment_data)
+    mask_paths = [segmentation_mask_path(parsed, path) for path in image_paths]
     multi_probs = predict_multi(multi_model, X_test, device)
     ova_probs = predict_ova(ova_models, X_test, device)
     multi_pred = multi_probs.argmax(axis=1)
@@ -1087,7 +1428,14 @@ def main() -> None:
     if parsed.require_mask:
         allowed_indices = {idx for idx, mask_path in enumerate(mask_paths) if mask_path is not None}
 
-    if parsed.image_indices:
+    if parsed.reference_image_csv:
+        selected = reference_image_indices(parsed.reference_image_csv, image_paths, allowed_indices)
+        selected = selected[: parsed.num_images]
+        print(
+            f"Selected {len(selected)} images from reference CSV {parsed.reference_image_csv}",
+            flush=True,
+        )
+    elif parsed.image_indices:
         selected = parsed.image_indices[: parsed.num_images]
     elif parsed.selection == "all":
         if allowed_indices is None:
@@ -1111,7 +1459,7 @@ def main() -> None:
     else:
         selected = ordered_indices(y_true, multi_pred, ova_pred, parsed.num_images)
 
-    labels = CLASS_LABELS.get(parsed.dataset, [str(i) for i in range(experiment_data.target_dim)])
+    labels = list(getattr(experiment_data, "class_names", None) or CLASS_LABELS.get(parsed.dataset, [str(i) for i in range(experiment_data.target_dim)]))
     labels = labels[: experiment_data.target_dim]
     rows = []
     all_class_rows: list[dict[str, object]] = []
@@ -1136,8 +1484,6 @@ def main() -> None:
                     class_idx,
                     device,
                     parsed,
-                    output_kind="multi",
-                    sample_seed=parsed.seed * 1_000_000 + idx * 100 + class_idx,
                 )
                 for class_idx in range(experiment_data.target_dim)
             ]
@@ -1149,11 +1495,9 @@ def main() -> None:
                 multi_target,
                 device,
                 parsed,
-                output_kind="multi",
-                sample_seed=parsed.seed * 1_000_000 + idx * 100 + multi_target,
             )
 
-        if parsed.include_all_ova_cams or parsed.include_all_class_metrics:
+        if parsed.include_all_ova_cams or parsed.include_all_class_metrics or parsed.include_ova_rgb_overlay:
             all_ova_cams = [
                 compute_cam(
                     model,
@@ -1161,10 +1505,8 @@ def main() -> None:
                     0,
                     device,
                     parsed,
-                    output_kind="ova",
-                    sample_seed=parsed.seed * 1_000_000 + idx * 100 + class_idx,
                 )
-                for class_idx, model in enumerate(gradcam_ova_models)
+                for model in gradcam_ova_models
             ]
             ova_cam = all_ova_cams[ova_target]
         else:
@@ -1175,13 +1517,37 @@ def main() -> None:
                 0,
                 device,
                 parsed,
-                output_kind="ova",
-                sample_seed=parsed.seed * 1_000_000 + idx * 100 + ova_target,
             )
         original = image_to_pil(image)
         mask = load_mask(mask_paths[idx], original.width, original.height)
-        multi_metrics = prefixed_metrics("multi", cam_mask_metrics(multi_cam, mask))
-        ova_metrics = prefixed_metrics("ova", cam_mask_metrics(ova_cam, mask))
+        multi_metrics = prefixed_metrics(
+            "multi",
+            cam_mask_metrics(
+                multi_cam,
+                mask,
+                top_percents=parsed.cam_top_percents,
+                mask_area_factors=parsed.cam_mask_area_factors,
+                peritumor_radii=parsed.peritumor_radii,
+            ),
+        )
+        ova_metrics = prefixed_metrics(
+            "ova",
+            cam_mask_metrics(
+                ova_cam,
+                mask,
+                top_percents=parsed.cam_top_percents,
+                mask_area_factors=parsed.cam_mask_area_factors,
+                peritumor_radii=parsed.peritumor_radii,
+            ),
+        )
+        multi_ova_metrics = prefixed_metrics(
+            "multi_ova",
+            cam_pair_metrics(
+                multi_cam,
+                ova_cam,
+                top_percents=parsed.cam_top_percents,
+            ),
+        )
 
         filename = (
             f"idx_{idx:04d}_true_{labels[target_class]}_"
@@ -1190,8 +1556,8 @@ def main() -> None:
         if parsed.no_save_images:
             filename = ""
         else:
-            multi_overlay = overlay_heatmap(image, multi_cam)
-            ova_overlay = overlay_heatmap(image, ova_cam)
+            multi_overlay = overlay_heatmap(image, multi_cam, parsed.heatmap_color)
+            ova_overlay = overlay_heatmap(image, ova_cam, parsed.heatmap_color)
             panel = make_panel(
                 original,
                 multi_overlay,
@@ -1202,6 +1568,8 @@ def main() -> None:
                 ova_label=labels[ova_pred_class],
                 ova_confidence=float(ova_probs[idx, ova_pred_class]),
                 mask=mask,
+                cam_label=cam_label,
+                heatmap_color_label=heatmap_color_label,
             )
             panel.save(output_dir / filename)
         all_ova_filename = ""
@@ -1210,19 +1578,37 @@ def main() -> None:
                 f"idx_{idx:04d}_true_{labels[target_class]}_"
                 f"multi_{labels[multi_pred_class]}_ova_all.png"
             )
-            multi_overlay = overlay_heatmap(image, multi_cam)
+            multi_overlay = overlay_heatmap(image, multi_cam, parsed.heatmap_color)
             all_ova_panel = make_all_ova_panel(
                 original,
                 multi_overlay,
-                [overlay_heatmap(image, cam) for cam in all_ova_cams],
+                [overlay_heatmap(image, cam, parsed.heatmap_color) for cam in all_ova_cams],
                 true_label=labels[target_class],
                 multi_label=labels[multi_pred_class],
                 multi_confidence=float(multi_probs[idx, multi_pred_class]),
                 ova_labels=labels,
                 ova_probs=ova_probs[idx],
                 mask=mask,
+                cam_label=cam_label,
+                heatmap_color_label=heatmap_color_label,
             )
             all_ova_panel.save(output_dir / all_ova_filename)
+
+        ova_rgb_filename = ""
+        if all_ova_cams is not None and parsed.include_ova_rgb_overlay and not parsed.no_save_images:
+            ova_rgb_filename = (
+                f"idx_{idx:04d}_true_{labels[target_class]}_"
+                f"multi_{labels[multi_pred_class]}_ova_rgb_overlay.png"
+            )
+            ova_rgb_overlay = make_ova_rgb_overlay(
+                image,
+                all_ova_cams,
+                ova_labels=labels,
+                ova_probs=ova_probs[idx],
+                true_label=labels[target_class],
+                mask=mask,
+            )
+            ova_rgb_overlay.save(output_dir / ova_rgb_filename)
 
         if parsed.include_all_class_metrics:
             assert all_multi_cams is not None
@@ -1239,7 +1625,13 @@ def main() -> None:
                         relation = "predicted_non_true_class"
                     else:
                         relation = "other_non_true_class"
-                    class_metrics = cam_mask_metrics(class_cam, mask)
+                    class_metrics = cam_mask_metrics(
+                        class_cam,
+                        mask,
+                        top_percents=parsed.cam_top_percents,
+                        mask_area_factors=parsed.cam_mask_area_factors,
+                        peritumor_radii=parsed.peritumor_radii,
+                    )
                     all_class_rows.append(
                         {
                             "test_index": idx,
@@ -1275,8 +1667,10 @@ def main() -> None:
                 "mask_path": str(mask_paths[idx]) if mask_paths[idx] is not None else "",
                 "image_file": filename,
                 "all_ova_image_file": all_ova_filename,
+                "ova_rgb_overlay_file": ova_rgb_filename,
                 **multi_metrics,
                 **ova_metrics,
+                **multi_ova_metrics,
             }
         )
 
@@ -1299,6 +1693,7 @@ def main() -> None:
             "mask_path",
             "image_file",
             "all_ova_image_file",
+            "ova_rgb_overlay_file",
         ]
         fieldnames = ordered_prefix + [key for key in fieldnames if key not in ordered_prefix]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -1336,7 +1731,7 @@ def main() -> None:
     if parsed.no_save_images:
         print(f"Saved CSV metrics for {len(rows)} CAM samples to {output_dir}", flush=True)
     else:
-        print(f"Saved {len(rows)} Grad-CAM panels to {output_dir}", flush=True)
+        print(f"Saved {len(rows)} {cam_label} panels to {output_dir}", flush=True)
     print(f"Index CSV: {output_dir / 'gradcam_index.csv'}", flush=True)
     print(f"Metrics summary CSV: {output_dir / 'gradcam_metrics_summary.csv'}", flush=True)
     if all_class_rows:

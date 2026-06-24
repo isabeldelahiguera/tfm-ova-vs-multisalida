@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -17,4 +17,4 @@ class ExperimentData:
     class_names: List[str]
     dataset_name: str
     dependency_strength: float
-
+    test_image_paths: Optional[List[str]] = None

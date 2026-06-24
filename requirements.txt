@@ -1,8 +1,14 @@
 numpy
 pandas
 pillow
+grad-cam
+matplotlib
+opencv-python
 scikit-learn
+scikit-image
 scipy
 statsmodels
 torch
 torchvision
+ttach
+zennit

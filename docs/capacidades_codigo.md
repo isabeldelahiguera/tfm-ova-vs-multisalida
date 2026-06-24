@@ -47,6 +47,7 @@ El código soporta estos datasets de clasificación:
 - `cifar10`
 - `brisc`
 - `tb_chest_xray`
+- `ham10000`
 - `dermatology`
 - `heart_disease`
 
@@ -62,6 +63,45 @@ Los resultados finales actuales solo usan:
 - `tb_chest_xray`
 
 Por tanto, `synthetic_multiclass`, `dermatology` y `heart_disease` quedan como soporte adicional del código, no como parte de la línea final de resultados.
+
+### HAM10000
+
+`ham10000` está preparado como extensión dermatológica para clasificación con imágenes RGB y explicabilidad espacial.
+Las imágenes originales tienen tamaño `600x450` y se redimensionan con `--image-size`, igual que el resto de datasets
+de imagen.
+
+El dataset descargado incluye:
+
+- `HAM10000_images_part_1.zip` y `HAM10000_images_part_2.zip`: 10015 imágenes de HAM10000.
+- `HAM10000_metadata`: etiquetas diagnósticas y metadatos.
+- `HAM10000_segmentations_lesion_tschandl.zip`: máscaras de lesión para las 10015 imágenes de HAM10000.
+- `ISIC2018_Task3_Test_Images.zip` y `ISIC2018_Task3_Test_GroundTruth.csv`: test oficial independiente de clasificación
+  de ISIC 2018 Task 3.
+
+El código soporta dos modos:
+
+- `--ham10000-test internal`: modo recomendado para las primeras pruebas y para explicabilidad, porque mantiene
+  coherencia con las máscaras disponibles. Si no existe, crea un holdout fijo `train/test` por `lesion_id` en
+  `data/ham10000/ham10000_train_test_split_seed2000.csv`. En cada ejecución, la parte `train` se divide después en
+  `train/val` por `lesion_id`, de forma equivalente al esquema de BRISC: test fijo separado y validación derivada
+  del train.
+- `--ham10000-test official`: usa HAM10000 como `train/val` y evalúa en el test independiente de ISIC 2018 Task 3.
+  Este modo existe para evaluación predictiva externa, pero no se usa en las primeras pruebas si se quiere mantener
+  el mismo test con máscaras para rendimiento y explicabilidad.
+
+En ambos casos, las particiones derivadas de HAM10000 se hacen agrupando por `lesion_id`: todas las imágenes de una
+misma lesión quedan en el mismo subconjunto y se evita fuga de información entre train, validación y test.
+
+El lanzador SLURM para las pruebas VGG de HAM10000 es `scripts/run_tfm_ham10000_vgg_slurm.sh`. Además de la VGG propia
+desde cero, el código soporta `--model-arch vgg16-pretrained`, con pesos ImageNet y tres políticas de ajuste:
+`--pretrained-finetune frozen`, `block5` o `full`. Para HAM10000 también están disponibles `--class-weighting balanced`,
+`--data-augmentation ham10000-basic` y `--ova-calibration platt`; la calibración de OVA se considera análisis auxiliar,
+no la comparación principal.
+
+El análisis Grad-CAM de HAM10000 se lanza con `scripts/run_explicabilidad_gradcam_slurm.sh`. Usa las máscaras de
+`HAM10000_segmentations_lesion_tschandl` cuando se trabaja con `--ham10000-test internal`, por lo que permite comparar
+rendimiento predictivo y concentración espacial de la explicación sobre el mismo test interno. Para comparaciones de
+tiempo o explicabilidad se recomienda fijar `atenea` con `sbatch --nodelist=atenea`.
 
 ## Datasets De Regresión
 
@@ -122,6 +162,8 @@ El parser admite, entre otros:
 - `--early-stopping-patience`
 - `--early-stopping-min-delta`
 - `--learning-rate`
+- `--class-weighting`: `none` o `balanced`. En clasificación multiclase usa pesos por clase en
+  `CrossEntropyLoss`; en `OVA` usa `pos_weight` en cada pérdida binaria.
 - `--seed`
 - `--seeds`
 - `--max-train`

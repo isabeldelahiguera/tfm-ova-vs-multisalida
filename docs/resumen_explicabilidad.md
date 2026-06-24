@@ -1,5 +1,9 @@
 # Resumen de Explicabilidad
 
+> Nota: este documento conserva parte del historial exploratorio de explicabilidad. El protocolo actualizado para
+> resultados finales del TFM está en `docs/protocolo_explicabilidad_actual.md`. En particular, RISE queda como
+> análisis exploratorio histórico y no forma parte del hilo final actual.
+
 Este documento resume el estado actual del análisis de explicabilidad, qué se está midiendo y cómo deben interpretarse los resultados.
 
 ## Objetivo
@@ -511,16 +515,20 @@ Las capas corresponden a:
 - `features.7`: bloque convolucional intermedio;
 - `features.2`: bloque temprano, con más detalle espacial pero menos semántica de clase.
 
-Cuando acaben los jobs:
+Cuando acaben los jobs, el resumen limpio por clase y plano se genera pasando uno o varios `gradcam_index.csv`:
 
 ```bash
-python scripts/analisis_gradcam_semillas_capas.py --dataset brisc
+python scripts/analisis_gradcam_por_plano_clase.py \
+  --csv resultados_actualizados/explicabilidad/brisc/seed_1_gradcampp/gradcam_index.csv
 ```
 
 Esto genera:
 
-- `resultados_actualizados/analisis_explicabilidad/brisc/gradcam_seed_layer_runs.csv`;
-- `resultados_actualizados/analisis_explicabilidad/brisc/gradcam_seed_layer_aggregate.csv`.
+- `resumen_global.csv`;
+- `resumen_por_clase.csv`;
+- `resumen_por_plano.csv`;
+- `resumen_por_clase_plano.csv`;
+- versiones `_long.csv` para lectura por métrica.
 
 RISE como método alternativo basado en perturbaciones aleatorias:
 

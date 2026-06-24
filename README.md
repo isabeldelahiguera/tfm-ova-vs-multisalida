@@ -30,10 +30,19 @@ Los experimentos versionados cubren:
 - `iris`, `wine`, `breast_cancer` y `digits` con MLP.
 - `mnist` y `cifar10` con VGG compacta.
 - `brisc` y `tb_chest_xray` con VGG compacta e imágenes redimensionadas a `128x128`.
+- `ham10000` queda preparado como extensión dermatológica para clasificación con split interno estratificado por lesión.
 
 El foco actual del repositorio es clasificación con `multi-output` frente a `OVA`. El código conserva algunas extensiones exploratorias, pero no forman parte de los resultados finales incluidos aquí.
 
 Para ver esas capacidades adicionales del código, como regresión, datasets sintéticos, `OVO` o datasets no usados en los resultados actuales, consultar `docs/capacidades_codigo.md`.
+
+El protocolo final de explicabilidad para BRISC, incluyendo Grad-CAM/Grad-CAM++, LRP, oclusión, análisis de
+shortcuts y cruce con predicciones por imagen, está resumido en `docs/protocolo_explicabilidad_actual.md`.
+La lectura principal es prudente: OVA mejora el rendimiento predictivo, pero no muestra una mejor localización
+tumoral de forma sistemática. La auditoría combina XAI, oclusión y descriptores del dataset para distinguir entre
+dependencia tumoral probable y posibles atajos contextuales. En los resultados actuales, meningioma es el caso más
+compatible con dependencia tumoral real, mientras que glioma y especialmente pituitary muestran patrones compatibles
+con uso de señales globales, contextuales o de adquisición.
 
 ## Estructura
 
@@ -48,6 +57,20 @@ Para ver esas capacidades adicionales del código, como regresión, datasets sin
 ```
 
 No se versionan datasets descargados, entornos locales, notebooks exploratorios, cachés de Python, logs de SLURM ni resultados experimentales locales como `resultados_actualizados/`, `resultados_10semillas/`, `resultados_estadisticos/` o `resultados_slurm/`.
+
+### Scripts clave de explicabilidad en BRISC
+
+Los scripts relevantes para la auditoría final son:
+
+- `scripts/explicabilidad_gradcam_vgg.py`: Grad-CAM y Grad-CAM++ con `pytorch-grad-cam`.
+- `scripts/explicabilidad_lrp_vgg.py`: LRP con `zennit` y regla `EpsilonGammaBox`.
+- `scripts/oclusion_tumor_brisc.py`: oclusión de máscara tumoral y peritumoral con dilatación `skimage.disk`.
+- `scripts/analisis_dataset_brisc_train_test.py`: descriptores morfológicos, de intensidad y contexto en train/test.
+- `scripts/resumir_shortcuts_brisc.py`: genera resúmenes legibles de posibles shortcuts a partir de contrastes por clase y clase+plano.
+- `scripts/analisis_errores_dataset_explicabilidad.py`: cruza predicciones por imagen con descriptores del dataset.
+
+Los resultados antiguos generados antes de migrar Grad-CAM/LRP a librerías externas deben tratarse como históricos o
+exploratorios, no como resultados finales.
 
 ## Instalación
 
@@ -109,6 +132,10 @@ Para que los tiempos sean comparables, los scripts SLURM actuales fijan el nodo 
 
 Esta restricción es importante para análisis de tiempo y arquitecturas. Los experimentos ampliados de Iris y BRISC
 se interpretan solo como refuerzo estadístico de rendimiento, por lo que no se usan para comparar tiempos.
+
+HAM10000 se usa como extensión dermatológica y puede lanzarse sin fijar nodo cuando solo se quieren métricas
+predictivas. Para comparar tiempos o hacer explicabilidad de forma homogénea se recomienda fijar `atenea` con
+`sbatch --nodelist=atenea`.
 
 ### Protocolo de semillas
 
@@ -299,6 +326,105 @@ data/tb_chest_xray/
 con las carpetas `Normal` y `Tuberculosis`.
 
 MNIST y CIFAR-10 se descargan o leen desde `data/` durante la carga de datos.
+
+HAM10000 debe estar descargado localmente con esta estructura, tras descomprimir los zips de imágenes:
+
+```text
+data/ham10000/
+  HAM10000_metadata
+  images/
+    ISIC_*.jpg
+  raw/
+    HAM10000_images_part_1.zip
+    HAM10000_images_part_2.zip
+    HAM10000_metadata
+    HAM10000_segmentations_lesion_tschandl.zip
+  masks/
+    HAM10000_segmentations_lesion_tschandl/
+      ISIC_*_segmentation.png
+```
+
+Ejemplo rápido de clasificación con HAM10000:
+
+```bash
+python run_experiments.py \
+  --task classification \
+  --dataset ham10000 \
+  --model-arch vgg \
+  --image-size 128 \
+  --coupling-modes multi-output ova \
+  --ham10000-root data/ham10000 \
+  --output-csv resultados_actualizados/secuencial/exp_ham10000_vgg.csv \
+  --summary-csv resultados_actualizados/secuencial/exp_ham10000_vgg_summary.csv
+```
+
+Para evaluar capacidad predictiva con el test independiente oficial de ISIC 2018 Task 3:
+
+```bash
+python run_experiments.py \
+  --task classification \
+  --dataset ham10000 \
+  --model-arch vgg \
+  --image-size 128 \
+  --batch-size 32 \
+  --coupling-modes multi-output ova \
+  --ham10000-root data/ham10000 \
+  --ham10000-test official \
+  --output-csv resultados_actualizados/secuencial/exp_ham10000_vgg_official.csv \
+  --summary-csv resultados_actualizados/secuencial/exp_ham10000_vgg_official_summary.csv \
+  --predictions-csv resultados_actualizados/secuencial/exp_ham10000_vgg_official_predictions.csv
+```
+
+El modo `--ham10000-test internal` usa un test interno por `lesion_id`, adecuado para explicabilidad espacial porque
+las máscaras disponibles corresponden a HAM10000. El modo `--ham10000-test official` usa HAM10000 solo para train/val
+y evalúa en el test independiente de ISIC 2018 Task 3.
+
+En modo interno, si no existe una partición fija, el cargador crea:
+
+```text
+data/ham10000/ham10000_train_test_split_seed2000.csv
+```
+
+Ese CSV asigna cada `lesion_id` completo a `train` o `test`, de modo que todas las imágenes de una misma lesión quedan
+siempre en el mismo subconjunto. Las siguientes ejecuciones reutilizan el CSV y mantienen el mismo test interno aunque
+se lancen varias semillas de entrenamiento. La validación se obtiene después dividiendo la parte `train` por
+`lesion_id`, siguiendo el esquema usado con datasets que ya traen train/test separados.
+
+El lanzador SLURM equivalente es:
+
+```bash
+sbatch scripts/run_tfm_ham10000_vgg_slurm.sh
+```
+
+Para lanzar la variante ponderada por desbalance:
+
+```bash
+CLASS_WEIGHTING=balanced WEIGHTING_TAG=balanced \
+sbatch --nodelist=atenea scripts/run_tfm_ham10000_vgg_slurm.sh
+```
+
+Para las pruebas con transferencia se puede usar VGG16 preentrenada en ImageNet y ajustar solo el bloque 5:
+
+```bash
+MODEL_ARCH=vgg16-pretrained PRETRAINED_FINETUNE=block5 IMAGE_SIZE=224 BATCH_SIZE=16 LEARNING_RATE=0.0001 \
+sbatch --nodelist=atenea scripts/run_tfm_ham10000_vgg_slurm.sh
+```
+
+En explicabilidad con HAM10000 se recomienda mantener `--ham10000-test internal`, porque ese test interno conserva
+máscaras de lesión para medir si Grad-CAM se concentra dentro de la lesión. Las configuraciones de referencia usadas
+para comparar rendimiento y mapas son:
+
+- VGG desde cero `[32, 64, 128]`.
+- VGG16 preentrenada con ajuste de `block5`, sin pesos de clase.
+- VGG16 preentrenada con ajuste de `block5`, con `CLASS_WEIGHTING=balanced`.
+
+El análisis Grad-CAM se lanza con `scripts/run_explicabilidad_gradcam_slurm.sh`; para mantener el hardware fijo:
+
+```bash
+DATASET=ham10000 MODEL_ARCH=vgg16-pretrained PRETRAINED_FINETUNE=block5 RUN_TAG=vgg16_block5 \
+SEEDS="1" NUM_IMAGES=14 SELECTION=balanced REQUIRE_MASK=1 IMAGE_SIZE=224 BATCH_SIZE=16 LEARNING_RATE=0.0001 \
+sbatch --nodelist=atenea scripts/run_explicabilidad_gradcam_slurm.sh
+```
 
 ## Métricas
 

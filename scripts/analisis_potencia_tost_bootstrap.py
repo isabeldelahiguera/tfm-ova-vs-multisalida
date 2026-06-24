@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import bootstrap
 
 
 
@@ -195,13 +196,15 @@ def intervalo_bootstrap_mediana(
     bootstrap_replicas: int,
     rng: np.random.Generator,
 ) -> tuple[float, float]:
-    # Se generan índices aleatorios para las muestras bootstrap. Cada fila de 'indices' corresponde a una muestra bootstrap, y cada columna corresponde a un elemento de la muestra original.
-    indices = rng.integers(0, len(muestra), size=(bootstrap_replicas, len(muestra)))
-    medianas_bootstrap = np.median(muestra[indices], axis=1) # mediana de cada muestra bootstrap
-    percentil_bajo = 100 * alpha # el percentil inferior para un IC de (1 - 2*alpha)*100% es alpha*100
-    percentil_alto = 100 * (1 - alpha) # el percentil superior para un IC de (1 - 2*alpha)*100% es (1 - alpha)*100
-    ic_bajo, ic_alto = np.percentile(medianas_bootstrap, [percentil_bajo, percentil_alto])
-    return float(ic_bajo), float(ic_alto)
+    resultado = bootstrap(
+        (muestra,),
+        np.median,
+        confidence_level=1 - 2 * alpha,
+        n_resamples=bootstrap_replicas,
+        method="percentile",
+        random_state=rng,
+    )
+    return float(resultado.confidence_interval.low), float(resultado.confidence_interval.high)
 
 
 def simular_potencia_tost_bootstrap(

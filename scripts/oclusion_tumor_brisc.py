@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import torch
-from PIL import Image, ImageFilter
+from skimage.morphology import binary_dilation, disk
+from sklearn.exceptions import UndefinedMetricWarning
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -24,6 +27,7 @@ from explicabilidad_gradcam_vgg import (
 )
 from tfm.data import load_experiment_data
 from tfm.experiment import train_multiclass_model, train_ova_models
+from tfm.metrics import classification_metrics
 from tfm.training import set_seed
 
 
@@ -78,12 +82,10 @@ def to_explicabilidad_args(parsed: argparse.Namespace) -> SimpleNamespace:
 
 
 def dilate_mask(mask: np.ndarray, radius: int) -> np.ndarray:
-    size = max(3, radius * 2 + 1)
-    if size % 2 == 0:
-        size += 1
-    mask_image = Image.fromarray(np.uint8(mask) * 255, mode="L")
-    dilated = mask_image.filter(ImageFilter.MaxFilter(size=size))
-    return np.asarray(dilated) > 0
+    mask = np.asarray(mask, dtype=bool)
+    if radius <= 0:
+        return mask
+    return binary_dilation(mask, footprint=disk(radius))
 
 
 def occlude_with_local_ring_mean(
@@ -147,6 +149,262 @@ def write_summary(rows: list[dict[str, object]], output_path: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=list(summary_rows[0].keys()))
         writer.writeheader()
         writer.writerows(summary_rows)
+
+
+PLANE_LABELS = {
+    "ax": "axial",
+    "co": "coronal",
+    "sa": "sagittal",
+}
+
+
+def extract_plane(path_value: object) -> tuple[str, str]:
+    filename = Path(str(path_value)).name
+    match = re.search(r"_(ax|co|sa)_", filename)
+    if not match:
+        return "unknown", "unknown"
+    plane = match.group(1)
+    return plane, PLANE_LABELS[plane]
+
+
+def prediction_outcomes(y_true: np.ndarray, multi_pred: np.ndarray, ova_pred: np.ndarray) -> np.ndarray:
+    return np.asarray(
+        [
+            prediction_outcome(int(target), int(multi), int(ova))
+            for target, multi, ova in zip(y_true, multi_pred, ova_pred)
+        ],
+        dtype=object,
+    )
+
+
+def add_metric_rows(
+    metric_rows: list[dict[str, object]],
+    *,
+    model_type: str,
+    condition: str,
+    occlusion_radius: int | str,
+    scope: str,
+    y_true_subset: np.ndarray,
+    y_pred_subset: np.ndarray,
+    labels: list[str],
+    true_label_names: np.ndarray,
+    planes: np.ndarray,
+    plane_names: np.ndarray,
+    outcomes: np.ndarray,
+    original_pred_subset: np.ndarray | None = None,
+    true_prob_original: np.ndarray | None = None,
+    true_prob_condition: np.ndarray | None = None,
+    occlusion_area_frac: np.ndarray | None = None,
+) -> None:
+    group_specs = [
+        ("all", np.ones(len(y_true_subset), dtype=bool), "all"),
+    ]
+
+    for true_label in sorted(set(true_label_names.tolist())):
+        group_specs.append(("true_label", true_label_names == true_label, true_label))
+    for plane_name in sorted(set(plane_names.tolist())):
+        group_specs.append(("plane", plane_names == plane_name, plane_name))
+    for true_label in sorted(set(true_label_names.tolist())):
+        for plane_name in sorted(set(plane_names.tolist())):
+            mask = (true_label_names == true_label) & (plane_names == plane_name)
+            if mask.any():
+                group_specs.append(("true_label_plane", mask, f"{true_label}|{plane_name}"))
+    for outcome in sorted(set(outcomes.tolist())):
+        group_specs.append(("outcome", outcomes == outcome, outcome))
+
+    for group_name, mask, group_value in group_specs:
+        if not mask.any():
+            continue
+
+        y_true_group = y_true_subset[mask]
+        y_pred_group = y_pred_subset[mask]
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
+            metrics = classification_metrics(y_true_group, y_pred_group)
+        row: dict[str, object] = {
+            "model_type": model_type,
+            "condition": condition,
+            "occlusion_radius": occlusion_radius,
+            "scope": scope,
+            "group": group_name,
+            "value": group_value,
+            "n": int(mask.sum()),
+            "correct_n": int(np.sum(y_true_group == y_pred_group)),
+            "wrong_n": int(np.sum(y_true_group != y_pred_group)),
+            **metrics,
+        }
+
+        if original_pred_subset is not None:
+            row["pred_changed"] = float(np.mean(original_pred_subset[mask] != y_pred_group))
+        else:
+            row["pred_changed"] = 0.0
+
+        if true_prob_original is not None and true_prob_condition is not None:
+            drop = true_prob_original[mask] - true_prob_condition[mask]
+            row["true_class_prob_original_mean"] = float(np.mean(true_prob_original[mask]))
+            row["true_class_prob_condition_mean"] = float(np.mean(true_prob_condition[mask]))
+            row["drop_true_class_mean"] = float(np.mean(drop))
+
+        if occlusion_area_frac is not None:
+            row["occlusion_area_frac_mean"] = float(np.mean(occlusion_area_frac[mask]))
+
+        metric_rows.append(row)
+
+
+def write_classification_metrics(
+    output_path: Path,
+    *,
+    y_true: np.ndarray,
+    labels: list[str],
+    image_paths: list[Path | None],
+    selected_indices: list[int],
+    occluded_meta: list[dict[str, object]],
+    multi_pred: np.ndarray,
+    ova_pred: np.ndarray,
+    multi_probs: np.ndarray,
+    ova_probs: np.ndarray,
+    multi_pred_occ: np.ndarray,
+    ova_pred_occ: np.ndarray,
+    multi_probs_occ: np.ndarray,
+    ova_probs_occ: np.ndarray,
+) -> None:
+    rows: list[dict[str, object]] = []
+    y_true = y_true.astype(int)
+    label_names = np.asarray([labels[int(target)] for target in y_true], dtype=object)
+    plane_values = np.asarray([extract_plane(path)[0] for path in image_paths], dtype=object)
+    plane_name_values = np.asarray([extract_plane(path)[1] for path in image_paths], dtype=object)
+    outcomes = prediction_outcomes(y_true, multi_pred, ova_pred)
+
+    add_metric_rows(
+        rows,
+        model_type="multi-output",
+        condition="original",
+        occlusion_radius="none",
+        scope="full_test",
+        y_true_subset=y_true,
+        y_pred_subset=multi_pred,
+        labels=labels,
+        true_label_names=label_names,
+        planes=plane_values,
+        plane_names=plane_name_values,
+        outcomes=outcomes,
+        true_prob_original=multi_probs[np.arange(len(y_true)), y_true],
+        true_prob_condition=multi_probs[np.arange(len(y_true)), y_true],
+    )
+    add_metric_rows(
+        rows,
+        model_type="OVA",
+        condition="original",
+        occlusion_radius="none",
+        scope="full_test",
+        y_true_subset=y_true,
+        y_pred_subset=ova_pred,
+        labels=labels,
+        true_label_names=label_names,
+        planes=plane_values,
+        plane_names=plane_name_values,
+        outcomes=outcomes,
+        true_prob_original=ova_probs[np.arange(len(y_true)), y_true],
+        true_prob_condition=ova_probs[np.arange(len(y_true)), y_true],
+    )
+
+    selected = np.asarray(selected_indices, dtype=int)
+    y_selected = y_true[selected]
+    selected_label_names = label_names[selected]
+    selected_planes = plane_values[selected]
+    selected_plane_names = plane_name_values[selected]
+    selected_outcomes = outcomes[selected]
+
+    add_metric_rows(
+        rows,
+        model_type="multi-output",
+        condition="original_masked",
+        occlusion_radius="none",
+        scope="masked_test",
+        y_true_subset=y_selected,
+        y_pred_subset=multi_pred[selected],
+        labels=labels,
+        true_label_names=selected_label_names,
+        planes=selected_planes,
+        plane_names=selected_plane_names,
+        outcomes=selected_outcomes,
+        true_prob_original=multi_probs[selected, y_selected],
+        true_prob_condition=multi_probs[selected, y_selected],
+    )
+    add_metric_rows(
+        rows,
+        model_type="OVA",
+        condition="original_masked",
+        occlusion_radius="none",
+        scope="masked_test",
+        y_true_subset=y_selected,
+        y_pred_subset=ova_pred[selected],
+        labels=labels,
+        true_label_names=selected_label_names,
+        planes=selected_planes,
+        plane_names=selected_plane_names,
+        outcomes=selected_outcomes,
+        true_prob_original=ova_probs[selected, y_selected],
+        true_prob_condition=ova_probs[selected, y_selected],
+    )
+
+    radii = sorted({int(meta["occlusion_radius"]) for meta in occluded_meta})
+    for radius in radii:
+        row_positions = [
+            pos for pos, meta in enumerate(occluded_meta) if int(meta["occlusion_radius"]) == radius
+        ]
+        original_indices = np.asarray([int(occluded_meta[pos]["idx"]) for pos in row_positions], dtype=int)
+        y_radius = y_true[original_indices]
+        occ_area = np.asarray(
+            [float(occluded_meta[pos]["occlusion_area_frac"]) for pos in row_positions],
+            dtype=float,
+        )
+
+        add_metric_rows(
+            rows,
+            model_type="multi-output",
+            condition="occluded",
+            occlusion_radius=radius,
+            scope="masked_test",
+            y_true_subset=y_radius,
+            y_pred_subset=multi_pred_occ[row_positions],
+            labels=labels,
+            true_label_names=label_names[original_indices],
+            planes=plane_values[original_indices],
+            plane_names=plane_name_values[original_indices],
+            outcomes=outcomes[original_indices],
+            original_pred_subset=multi_pred[original_indices],
+            true_prob_original=multi_probs[original_indices, y_radius],
+            true_prob_condition=multi_probs_occ[row_positions, y_radius],
+            occlusion_area_frac=occ_area,
+        )
+        add_metric_rows(
+            rows,
+            model_type="OVA",
+            condition="occluded",
+            occlusion_radius=radius,
+            scope="masked_test",
+            y_true_subset=y_radius,
+            y_pred_subset=ova_pred_occ[row_positions],
+            labels=labels,
+            true_label_names=label_names[original_indices],
+            planes=plane_values[original_indices],
+            plane_names=plane_name_values[original_indices],
+            outcomes=outcomes[original_indices],
+            original_pred_subset=ova_pred[original_indices],
+            true_prob_original=ova_probs[original_indices, y_radius],
+            true_prob_condition=ova_probs_occ[row_positions, y_radius],
+            occlusion_area_frac=occ_area,
+        )
+
+    with output_path.open("w", newline="") as handle:
+        fieldnames = list(
+            dict.fromkeys(key for row in rows for key in row.keys())
+        )
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def main() -> None:
@@ -278,8 +536,27 @@ def main() -> None:
     summary_path = output_dir / "occlusion_summary.csv"
     write_summary(rows, summary_path)
 
+    classification_metrics_path = output_dir / "occlusion_classification_metrics.csv"
+    write_classification_metrics(
+        classification_metrics_path,
+        y_true=y_true,
+        labels=labels,
+        image_paths=image_paths,
+        selected_indices=selected,
+        occluded_meta=occluded_meta,
+        multi_pred=multi_pred,
+        ova_pred=ova_pred,
+        multi_probs=multi_probs,
+        ova_probs=ova_probs,
+        multi_pred_occ=multi_pred_occ,
+        ova_pred_occ=ova_pred_occ,
+        multi_probs_occ=multi_probs_occ,
+        ova_probs_occ=ova_probs_occ,
+    )
+
     print(f"Saved occlusion index to {index_path}", flush=True)
     print(f"Saved occlusion summary to {summary_path}", flush=True)
+    print(f"Saved occlusion classification metrics to {classification_metrics_path}", flush=True)
 
 
 if __name__ == "__main__":

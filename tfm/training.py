@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import random
 import copy
 from typing import Dict, Tuple
@@ -5,7 +7,9 @@ from typing import Dict, Tuple
 import numpy as np
 import sklearn
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+from sklearn.utils.class_weight import compute_sample_weight
+from torch.utils.data import DataLoader, Dataset, TensorDataset, WeightedRandomSampler
+from torchvision import transforms
 
 
 def set_seed(seed: int) -> None:
@@ -26,6 +30,60 @@ def to_tensor_dataset(X: np.ndarray, y: np.ndarray, y_dtype) -> TensorDataset:
     return TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=y_dtype))
 
 
+class AugmentedTensorDataset(Dataset):
+    def __init__(self, X: np.ndarray, y: np.ndarray, y_dtype, transform):
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=y_dtype)
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.y)
+
+    def __getitem__(self, idx: int):
+        image = self.X[idx]
+        if self.transform is not None:
+            image = self.transform(image)
+        return image, self.y[idx]
+
+
+def build_train_transform(data_augmentation: str, X_train: np.ndarray):
+    if data_augmentation == "none":
+        return None
+    if X_train.ndim != 4:
+        raise ValueError("Data augmentation is only supported for image tensors with shape (N, C, H, W)")
+    if data_augmentation == "ham10000-basic":
+        return transforms.Compose(
+            [
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomVerticalFlip(p=0.5),
+                transforms.RandomAffine(
+                    degrees=20,
+                    translate=(0.02, 0.02),
+                    scale=(0.95, 1.05),
+                    interpolation=transforms.InterpolationMode.BILINEAR,
+                ),
+                transforms.ColorJitter(brightness=0.10, contrast=0.10, saturation=0.05, hue=0.02),
+            ]
+        )
+    raise ValueError(f"Unknown data augmentation mode: {data_augmentation}")
+
+
+def build_train_sampler(train_sampler: str, labels: np.ndarray, seed: int):
+    if train_sampler == "none":
+        return None
+    if train_sampler != "balanced":
+        raise ValueError(f"Unknown train sampler mode: {train_sampler}")
+
+    sample_weights = compute_sample_weight(class_weight="balanced", y=np.asarray(labels).astype(int))
+    generator = torch.Generator().manual_seed(seed)
+    return WeightedRandomSampler(
+        weights=torch.as_tensor(sample_weights, dtype=torch.double),
+        num_samples=len(sample_weights),
+        replacement=True,
+        generator=generator,
+    )
+
+
 def create_data_loaders(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -34,13 +92,28 @@ def create_data_loaders(
     batch_size: int,
     seed: int,
     y_dtype,
+    data_augmentation: str = "none",
+    train_sampler: str = "none",
+    sampler_labels: np.ndarray | None = None,
 ) -> Tuple[DataLoader, DataLoader]:
     generator = torch.Generator().manual_seed(seed)
+    train_transform = build_train_transform(data_augmentation, X_train)
+    train_dataset = (
+        AugmentedTensorDataset(X_train, y_train, y_dtype, train_transform)
+        if train_transform is not None
+        else to_tensor_dataset(X_train, y_train, y_dtype)
+    )
+    sampler = build_train_sampler(
+        train_sampler,
+        y_train if sampler_labels is None else sampler_labels,
+        seed,
+    )
     train_loader = DataLoader(
-        to_tensor_dataset(X_train, y_train, y_dtype),
+        train_dataset,
         batch_size=batch_size,
-        shuffle=True,
-        generator=generator,
+        shuffle=sampler is None,
+        sampler=sampler,
+        generator=None if sampler is not None else generator,
     )
     val_loader = DataLoader(
         to_tensor_dataset(X_val, y_val, y_dtype),
