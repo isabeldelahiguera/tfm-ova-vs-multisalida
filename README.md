@@ -1,76 +1,61 @@
-# TFM - Output coupling in neural networks
+# TFM - OVA frente a redes multi-salida
 
-Este repositorio contiene el código experimental del TFM sobre acoplamiento de salidas en redes neuronales. La comparación principal estudia si una única red con varias salidas se comporta de forma equivalente, o suficientemente parecida, a entrenar redes independientes para cada salida.
+Este repositorio contiene el código experimental del TFM sobre clasificadores neuronales `multi-output` y clasificadores `One-vs-All` (`OVA`). La pregunta central es si una red con una salida por clase se comporta, en la práctica, de forma equivalente o suficientemente parecida a entrenar una red binaria independiente por clase.
 
-En clasificación, el caso estudiado es:
+La comparación no se limita al rendimiento predictivo. El trabajo también estudia el coste de entrenamiento, la posibilidad de paralelizar OVA, la sensibilidad a arquitecturas reducidas y, en datasets biomédicos, si las predicciones parecen apoyarse en regiones anatómicamente plausibles o en señales contextuales del dataset.
 
-- `multi-output`: una única red con una salida por clase.
-- `OVA`: una red binaria por clase, entrenada contra el resto de clases.
+## Historia experimental
 
-La comparación se interpreta de forma predictiva y funcional. No se asume equivalencia computacional: entrenar una red por clase suele ser más costoso que entrenar una única red multiclase. Por eso los resultados guardan tanto métricas predictivas como tiempo de entrenamiento, y el repositorio incluye un flujo separado para estimar el coste de OVA cuando sus clasificadores se entrenan en paralelo.
+La línea principal del TFM compara:
 
-## Resultados
+- `multi-output`: una única red multiclase con una salida por clase.
+- `OVA`: un conjunto de redes binarias, una por clase frente al resto.
 
-Los resultados nuevos de los experimentos se guardan localmente en `resultados_actualizados/`, pero esa carpeta no se versiona en GitHub. La tanda principal secuencial escribe en `resultados_actualizados/secuencial/`, los estudios OVA paralelos en `resultados_actualizados/paralelo/` y los análisis derivados en subcarpetas de `resultados_actualizados/`.
+La hipótesis inicial se evalúa primero como equivalencia práctica de rendimiento mediante métricas pareadas por semilla. Después se añade la parte computacional: OVA entrena más modelos, pero esos modelos pueden entrenarse por clase en paralelo. Por eso el código guarda tanto el coste secuencial acumulado como una estimación del tiempo paralelo ideal basada en el máximo de los tiempos por clase.
 
-La base experimental usa 10 semillas por configuración. Se realizaron ampliaciones puntuales de semillas cuando el
-análisis de potencia lo aconsejó para los contrastes estadísticos: Iris y BRISC cuentan con ejecuciones ampliadas
-en `resultados_actualizados/ampliados/`. Estas ampliaciones se usan para Wilcoxon/TOST sobre métricas predictivas,
-no para el análisis temporal. Cada ejecución detallada genera dos ficheros por dataset:
+Sobre esa base se probaron extensiones de eficiencia:
 
-- `exp_*.csv`: resultados detallados por semilla y tipo de modelo.
-- `exp_*_summary.csv`: medias agregadas por configuración.
+- paralelización de los clasificadores OVA;
+- reducción arquitectónica en MLP y VGG compacta;
+- configuraciones seleccionadas por rendimiento y tiempo;
+- análisis estadístico con Wilcoxon y TOST/bootstrap;
+- generación de figuras y tablas para la memoria.
 
-Los CSV secuenciales conservan el identificador del trabajo SLURM en el nombre cuando proceden de los scripts de lanzamiento. `resultados_slurm/` queda como zona de trabajo heredada para scripts antiguos y no es la salida recomendada de la tanda final actual.
+En la parte biomédica se añadió una auditoría de explicabilidad. Para BRISC se combinaron Grad-CAM/Grad-CAM++, LRP, oclusión tumoral y análisis de posibles shortcuts. La lectura final es prudente: OVA puede mejorar el rendimiento en BRISC, pero no muestra de forma sistemática una mejor localización tumoral. Para HAM10000 se dejaron implementadas pruebas dermatológicas adicionales con VGG16 preentrenada, balanceo, selección de clases y análisis de atajos visuales.
 
-## Experimentos Actuales
-
-Los experimentos versionados cubren:
-
-- `iris`, `wine`, `breast_cancer` y `digits` con MLP.
-- `mnist` y `cifar10` con VGG compacta.
-- `brisc` y `tb_chest_xray` con VGG compacta e imágenes redimensionadas a `128x128`.
-- `ham10000` queda preparado como extensión dermatológica para clasificación con split interno estratificado por lesión.
-
-El foco actual del repositorio es clasificación con `multi-output` frente a `OVA`. El código conserva algunas extensiones exploratorias, pero no forman parte de los resultados finales incluidos aquí.
-
-Para ver esas capacidades adicionales del código, como regresión, datasets sintéticos, `OVO` o datasets no usados en los resultados actuales, consultar `docs/capacidades_codigo.md`.
-
-El protocolo final de explicabilidad para BRISC, incluyendo Grad-CAM/Grad-CAM++, LRP, oclusión, análisis de
-shortcuts y cruce con predicciones por imagen, está resumido en `docs/protocolo_explicabilidad_actual.md`.
-La lectura principal es prudente: OVA mejora el rendimiento predictivo, pero no muestra una mejor localización
-tumoral de forma sistemática. La auditoría combina XAI, oclusión y descriptores del dataset para distinguir entre
-dependencia tumoral probable y posibles atajos contextuales. En los resultados actuales, meningioma es el caso más
-compatible con dependencia tumoral real, mientras que glioma y especialmente pituitary muestran patrones compatibles
-con uso de señales globales, contextuales o de adquisición.
-
-## Estructura
+## Organización del código
 
 ```text
 .
-|-- run_experiments.py              # Entrada principal para lanzar experimentos
-|-- tfm/                            # Paquete con carga de datos, modelos, entrenamiento y métricas
-|-- docs/                           # Notas sobre capacidades adicionales del código
-|-- scripts/                        # Scripts de análisis auxiliares
-|-- requirements.txt                # Dependencias Python principales
-`-- .gitignore                      # Archivos locales excluidos de Git
+|-- run_experiments.py          # Entrada principal para experimentos secuenciales
+|-- run_parallel_ova.py         # Entrenamiento/agregación de OVA por clase
+|-- tfm/                        # Paquete principal del experimento
+|   |-- cli.py                  # Argumentos de línea de comandos
+|   |-- data.py                 # Carga y partición de datasets
+|   |-- models.py               # MLP, VGG compacta, VGG16/ViT preentrenadas
+|   |-- training.py             # Entrenamiento, early stopping y loaders
+|   |-- experiment.py           # Flujo multi-output, OVA, métricas y CSV
+|   |-- parallel_ova.py         # Flujo OVA paralelizable
+|   |-- metrics.py              # Métricas de clasificación y regresión
+|   `-- evaluation.py           # Utilidades de evaluación
+|-- scripts/                    # Análisis estadístico, explicabilidad y figuras
+|-- docs/                       # Documentación de protocolos y extensiones
+|-- requirements.txt            # Dependencias principales usadas por el TFM
+`-- .gitignore                  # Datos, resultados, memoria y artefactos locales
 ```
 
-No se versionan datasets descargados, entornos locales, notebooks exploratorios, cachés de Python, logs de SLURM ni resultados experimentales locales como `resultados_actualizados/`, `resultados_10semillas/`, `resultados_estadisticos/` o `resultados_slurm/`.
+Los resultados experimentales, datasets descargados, checkpoints, logs y la memoria en LaTeX no se versionan. En local se usan carpetas como `data/`, `resultados_actualizados/`, `slurm_logs/`, `Memoria TFM/` y `figuras_caepia/`.
 
-### Scripts clave de explicabilidad en BRISC
+## Datasets principales
 
-Los scripts relevantes para la auditoría final son:
+Los experimentos centrales usan:
 
-- `scripts/explicabilidad_gradcam_vgg.py`: Grad-CAM y Grad-CAM++ con `pytorch-grad-cam`.
-- `scripts/explicabilidad_lrp_vgg.py`: LRP con `zennit` y regla `EpsilonGammaBox`.
-- `scripts/oclusion_tumor_brisc.py`: oclusión de máscara tumoral y peritumoral con dilatación `skimage.disk`.
-- `scripts/analisis_dataset_brisc_train_test.py`: descriptores morfológicos, de intensidad y contexto en train/test.
-- `scripts/resumir_shortcuts_brisc.py`: genera resúmenes legibles de posibles shortcuts a partir de contrastes por clase y clase+plano.
-- `scripts/analisis_errores_dataset_explicabilidad.py`: cruza predicciones por imagen con descriptores del dataset.
+- `iris`, `wine`, `breast_cancer` y `digits` con MLP;
+- `mnist` y `cifar10` con VGG compacta;
+- `brisc` y `tb_chest_xray` con VGG compacta e imágenes `128x128`;
+- `ham10000` como extensión dermatológica, no como eje principal de la comparación final.
 
-Los resultados antiguos generados antes de migrar Grad-CAM/LRP a librerías externas deben tratarse como históricos o
-exploratorios, no como resultados finales.
+El código conserva datasets y modos extra para exploración, como regresión, datasets sintéticos, `OVO`, `dermatology` y `heart_disease`. Esos casos se describen en `docs/capacidades_codigo.md` y no forman parte de los resultados principales del TFM.
 
 ## Instalación
 
@@ -78,11 +63,11 @@ exploratorios, no como resultados finales.
 pip install -r requirements.txt
 ```
 
-Los datasets grandes se mantienen en local dentro de `data/`. Esa carpeta está ignorada por Git.
+`requirements.txt` contiene las dependencias principales usadas en la línea final del TFM. Algunas extensiones exploratorias pueden necesitar dependencias opcionales; por ejemplo, `dermatology` y `heart_disease` usan `ucimlrepo`, pero no se incluye como dependencia principal porque esos datasets no se utilizaron en los resultados finales.
 
-## Ejecución
+## Ejecución básica
 
-Ejemplo con un dataset tabular:
+Ejemplo tabular con Wine:
 
 ```bash
 python run_experiments.py \
@@ -90,379 +75,133 @@ python run_experiments.py \
   --dataset wine \
   --seeds 1 2 3 4 5 6 7 8 9 10 \
   --coupling-modes multi-output ova \
-  --output-csv exp_wine.csv \
-  --summary-csv exp_wine_summary.csv
+  --output-csv resultados_actualizados/secuencial/exp_wine.csv \
+  --summary-csv resultados_actualizados/secuencial/exp_wine_summary.csv
 ```
 
-Ejemplo con MNIST usando VGG compacta:
+Ejemplo con MNIST y VGG compacta:
 
 ```bash
 python run_experiments.py \
   --task classification \
   --dataset mnist \
   --model-arch vgg \
+  --image-size 128 \
   --seeds 1 2 3 4 5 6 7 8 9 10 \
   --coupling-modes multi-output ova \
   --epochs 50 \
   --early-stopping-patience 10 \
-  --early-stopping-min-delta 1e-4 \
   --batch-size 64 \
-  --output-csv exp_mnist_vgg.csv \
-  --summary-csv exp_mnist_vgg_summary.csv
+  --output-csv resultados_actualizados/secuencial/exp_mnist_vgg.csv \
+  --summary-csv resultados_actualizados/secuencial/exp_mnist_vgg_summary.csv
 ```
 
-Si se trabaja en un servidor con SLURM, la tanda secuencial final se envía por dataset o grupo de datasets:
+Cada ejecución detallada genera:
 
-```bash
-sbatch scripts/run_tfm_classic_slurm.sh
-sbatch scripts/run_tfm_mnist_vgg_slurm.sh
-sbatch scripts/run_tfm_cifar10_vgg_slurm.sh
-sbatch scripts/run_tfm_brisc_vgg_slurm.sh
-sbatch scripts/run_tfm_tb_vgg_slurm.sh
-```
+- `exp_*.csv`: resultados por semilla y tipo de modelo;
+- `exp_*_summary.csv`: resumen agregado por configuración.
 
-Los scripts secuenciales actualizados escriben sus salidas en `resultados_actualizados/secuencial/` y los logs en
-`slurm_logs/`. Esas carpetas son locales; `RESULT_DIR` permite cambiar la carpeta de salida.
+Las métricas principales son `accuracy`, `balanced_accuracy`, `precision_macro`, `recall_macro`, `f1_macro` y `train_time_seconds`. En el flujo OVA paralelo se añaden `parallel_train_time_seconds` y `ova_model_train_time_seconds_mean`.
 
-Para que los tiempos sean comparables, los scripts SLURM actuales fijan el nodo de referencia por dataset:
+## Flujos de análisis
 
-- `zeus`: clásicos MLP y BRISC.
-- `atenea`: MNIST y CIFAR-10.
-- `titan`: TB Chest X-ray.
+### Comparación principal
 
-Esta restricción es importante para análisis de tiempo y arquitecturas. Los experimentos ampliados de Iris y BRISC
-se interpretan solo como refuerzo estadístico de rendimiento, por lo que no se usan para comparar tiempos.
+`run_experiments.py` ejecuta la comparación secuencial entre `multi-output` y `OVA`. El diseño estadístico es pareado por semilla: para una semilla `x`, se compara `f1_macro(OVA, x) - f1_macro(multi-output, x)`.
 
-HAM10000 se usa como extensión dermatológica y puede lanzarse sin fijar nodo cuando solo se quieren métricas
-predictivas. Para comparar tiempos o hacer explicabilidad de forma homogénea se recomienda fijar `atenea` con
-`sbatch --nodelist=atenea`.
+Los scripts estadísticos principales son:
 
-### Protocolo de semillas
+- `scripts/test_wilcoxon_pareado.py`;
+- `scripts/test_equivalencia_tost_bootstrap.py`;
+- `scripts/analisis_potencia_wilcoxon.py`;
+- `scripts/analisis_potencia_tost_bootstrap.py`.
 
-La comparación estadística usa un diseño pareado por repetición experimental. En cada repetición, la columna
-`seed` identifica la semilla base que fija la generación o partición de datos y el entrenamiento comparado para
-ambos enfoques.
+### OVA paralelo y eficiencia
 
-Para clasificación, el protocolo actual es:
+`run_parallel_ova.py` separa el entrenamiento OVA por clase. Primero genera artefactos por clase y después reconstruye el ensemble completo por semilla. Este flujo permite estimar el coste paralelo ideal de OVA.
 
-- `multi-output` entrena su red multiclase con la semilla `x` de la repetición.
-- `OVA` reutiliza esa misma semilla `x` para cada clasificador binario de la repetición.
-- El flujo OVA paralelo aplica la misma política de semillas que el flujo secuencial.
+Scripts relacionados:
 
-La semilla compartida reduce variabilidad accidental de inicialización y barajado entre los enfoques, pero no
-convierte sus entrenamientos en idénticos: `multi-output` sigue siendo una red multiclase y `OVA` sigue siendo un
-ensemble de redes binarias con otra función objetivo. Los tests se aplican sobre diferencias pareadas por semilla,
-por ejemplo `f1_macro(OVA, x) - f1_macro(multi-output, x)`.
+- `scripts/analisis_tiempos_paralelo_ova.py`;
+- `scripts/analisis_arquitecturas_ova.py`;
+- `scripts/analisis_configuraciones_seleccionadas_estadistico.py`;
+- `scripts/figuras_tfm_configuraciones_seleccionadas.py`;
+- `scripts/figuras_tfm_delta_sensibilidad_configuraciones.py`.
 
-### OVA paralelo en SLURM
+### Explicabilidad en BRISC
 
-La comparación principal mantiene el flujo anterior de `run_experiments.py`. Para estudiar el coste de OVA en un
-escenario paralelizable existe además un flujo separado por clases OVA:
+El protocolo final de explicabilidad combina mapas, perturbaciones y análisis del dataset:
 
-```bash
-HIDDEN_LAYERS="32 16" \
-RUN_NAME="ova_parallel_32_16" \
-bash scripts/submit_tfm_all_parallel_ova_slurm.sh
-```
+- `scripts/explicabilidad_gradcam_vgg.py`: Grad-CAM y Grad-CAM++;
+- `scripts/explicabilidad_lrp_vgg.py`: LRP con `zennit`;
+- `scripts/oclusion_tumor_brisc.py`: oclusión de máscara tumoral y peritumoral;
+- `scripts/analisis_dataset_brisc_train_test.py`: descriptores morfológicos, de intensidad y contexto;
+- `scripts/resumir_shortcuts_brisc.py`: resumen de posibles shortcuts;
+- `scripts/analisis_errores_dataset_explicabilidad.py`: cruce entre predicciones, errores y descriptores.
 
-Por defecto ese lanzador incluye `iris`, `wine`, `breast_cancer` y `digits` con MLP, y `mnist`, `cifar10`,
-`brisc` y `tb_chest_xray` con VGG. Crea un array SLURM por dataset con una tarea por clase OVA. Cada tarea recorre todas las semillas
-solicitadas para esa clase y guarda CSV intermedios bajo `resultados_actualizados/paralelo/$RUN_NAME/artifacts/`: un
-`class_*_summaries.csv` con los tiempos de esa clase por semilla y un `class_*_predictions.csv` con las
-probabilidades de test que necesita la agregación. Cuando el array termina correctamente, un job dependiente
-reconstruye el ensemble por semilla, escribe en `resultados_actualizados/paralelo/$RUN_NAME/` los CSV finales, incluido un CSV
-conjunto `*_class_times.csv` con los tiempos por clase, y borra los CSV intermedios de ese dataset.
+El detalle metodológico está en `docs/protocolo_explicabilidad_actual.md`. El documento histórico `docs/resumen_explicabilidad.md` conserva pruebas exploratorias anteriores.
 
-Para que los tiempos paralelos no mezclen GPUs de nodos distintos, el lanzador fija las tareas de entrenamiento
-OVA al nodo secuencial de referencia de cada dataset. La tanda actual usa `zeus` para los clásicos y BRISC,
-`atenea` para MNIST y CIFAR-10, y `titan` para TB.
+### HAM10000
 
-```bash
-RUN_NAME="ova_parallel_actual" \
-bash scripts/submit_tfm_all_parallel_ova_slurm.sh
-```
+HAM10000 queda como extensión dermatológica. El código soporta split interno por `lesion_id`, test oficial de ISIC 2018 Task 3, VGG compacta, VGG16 preentrenada, balanceo por sampler, pesos de clase, focal loss para OVA, calibración auxiliar y modo binario maligno/no maligno.
 
-Los valores por dataset se pueden cambiar con `CLASSIC_PARALLEL_NODE`, `MNIST_PARALLEL_NODE`,
-`CIFAR10_PARALLEL_NODE`, `BRISC_PARALLEL_NODE` y `TB_PARALLEL_NODE`. `PARALLEL_NODE` sigue disponible como
-override global cuando se quiera forzar todos los paralelos a un mismo nodo.
+Documentos relacionados:
 
-Esto fija el hardware de los clasificadores OVA paralelos. No implica que todas las clases se ejecuten a la vez:
-la partición actual ofrece como máximo 4 GPUs por nodo, de modo que datasets con 10 clases como `digits`,
-`mnist` o `cifar10` se planifican por tandas en ese mismo nodo.
+- `docs/resumen_ham10000_decision_atajos.md`;
+- `docs/ham10000_atajos_por_artefacto_y_clase.md`;
+- `docs/capacidades_codigo.md`.
 
-Los CSV agregados conservan `train_time_seconds` como suma de los tiempos de las redes OVA, equivalente al coste
-secuencial acumulado. Añaden `parallel_train_time_seconds`, que toma el máximo de los tiempos por clase para estimar
-el tiempo paralelo ideal si las redes se entrenan simultáneamente con recursos suficientes, y
-`ova_model_train_time_seconds_mean`, que resume el coste medio por clasificador.
+## Parámetros útiles
 
-El script `scripts/analisis_tiempos_paralelo_ova.py` cruza los CSV secuenciales con los CSV agregados del flujo
-paralelo y produce detalle por semilla y resumen por dataset. Calcula la aceleración estimada de OVA al pasar del
-entrenamiento secuencial al paralelo ideal y la razón entre ese tiempo ideal de OVA y el tiempo de `multi-output`.
-La tabla final conserva solo las columnas interpretables para el informe: tiempo medio de `multi-output`, tiempo
-medio de OVA secuencial, tiempo medio de OVA paralelo ideal, aceleración ideal y razón frente a `multi-output`.
+Algunos argumentos relevantes de `run_experiments.py`:
 
-### Arquitecturas OVA reducidas
+- `--coupling-modes multi-output ova`: compara red multiclase y OVA.
+- `--model-arch mlp|vgg|vgg16-pretrained|vit-b-16-pretrained`: arquitectura del modelo.
+- `--hidden-layers`: capas ocultas de MLP.
+- `--vgg-channels`: canales de la VGG compacta.
+- `--class-weighting balanced`: pesos por clase en la pérdida.
+- `--train-sampler balanced`: sampler balanceado en entrenamiento.
+- `--ova-loss bce|focal`: pérdida binaria para clasificadores OVA.
+- `--ova-calibration none|platt|threshold|threshold-f1`: calibración auxiliar de OVA.
+- `--pretrained-finetune frozen|block5|last-block|full`: política de ajuste para modelos preentrenados.
+- `--predictions-csv`: guarda predicciones por muestra para análisis posteriores.
 
-Además de la comparación principal, el repositorio incluye un estudio de arquitecturas reducidas para comprobar si
-OVA mantiene rendimiento al usar modelos más pequeños.
+## Datos locales
 
-Para datasets clásicos MLP se comparan:
-
-- referencia `[32, 16]`, procedente de la tanda secuencial principal;
-- OVA `[24, 12]`;
-- OVA `[16, 8]`.
-
-Los scripts correspondientes son:
-
-```bash
-sbatch scripts/run_tfm_classic_OVA_24_12_slurm.sh
-sbatch scripts/run_tfm_classic_OVA_16_8_slurm.sh
-```
-
-Para datasets VGG se pueden lanzar arquitecturas reducidas cambiando `VGG_CHANNELS` y escribiendo en una carpeta
-separada para no pisar los resultados base. Por ejemplo:
-
-```bash
-RESULT_DIR=resultados_actualizados/arquitecturas_ova_vgg/vgg_24_48_96 \
-COUPLING_MODES=ova \
-VGG_CHANNELS="24 48 96" \
-sbatch scripts/run_tfm_mnist_vgg_slurm.sh
-
-RESULT_DIR=resultados_actualizados/arquitecturas_ova_vgg/vgg_16_32_64 \
-COUPLING_MODES=ova \
-VGG_CHANNELS="16 32 64" \
-sbatch scripts/run_tfm_mnist_vgg_slurm.sh
-```
-
-El mismo patrón se aplica a `run_tfm_cifar10_vgg_slurm.sh`, `run_tfm_brisc_vgg_slurm.sh` y
-`run_tfm_tb_vgg_slurm.sh`. El análisis conjunto se genera con:
-
-```bash
-python scripts/analisis_arquitecturas_ova.py
-```
-
-Este script espera que existan las dos arquitecturas reducidas para todos los datasets incluidos. Para VGG busca los
-CSV por patrón dentro de `resultados_actualizados/arquitecturas_ova_vgg/vgg_24_48_96/` y
-`resultados_actualizados/arquitecturas_ova_vgg/vgg_16_32_64/`.
-
-### Tandas recientes de eficiencia OVA
-
-Tras comprobar la equivalencia práctica entre `multi-output` y `OVA` en varios datasets, se añadieron tandas
-centradas en el principal inconveniente de OVA: el coste de entrenar un clasificador por clase. Estas tandas no
-proponen un algoritmo nuevo, sino que evalúan si el coste adicional puede mitigarse mediante entrenamiento paralelo,
-arquitecturas reducidas y ajustes simples de entrenamiento sin perder rendimiento predictivo.
-
-Las carpetas relevantes son:
-
-- `resultados_actualizados/paralelo/ova_vgg32_64_128_bs128_lr1e3_pat10_ep50/`: MNIST y CIFAR-10 con VGG
-  `[32, 64, 128]`, `batch_size=128`, `epochs=50`, `patience=10` y `learning_rate=0.001`.
-- `resultados_actualizados/paralelo/ova_tb_vgg16_32_64_bs64_lr1e3_pat10_ep50/`: TB con VGG reducido
-  `[16, 32, 64]`, `batch_size=64`, `epochs=50`, `patience=10` y `learning_rate=0.001`.
-- `resultados_actualizados/paralelo/ova_tb_vgg16_32_64_lr3e3_pat5_ep30_bs64/`: TB con configuración más agresiva
-  (`batch_size=64`, `epochs=30`, `patience=5`, `learning_rate=0.003`).
-- `resultados_actualizados/paralelo/ova_brisc_vgg24_48_96_bs32_lr1e3_pat10_ep50/` y
-  `resultados_actualizados/paralelo/ova_brisc_vgg24_48_96_bs64_lr1e3_pat10_ep50/`: BRISC con VGG reducido
-  `[24, 48, 96]`.
-- `resultados_actualizados/paralelo/ova_brisc_vgg32_64_128_bs64_lr1e3_pat10_ep50/` y
-  `resultados_actualizados/paralelo/ova_brisc_vgg32_64_128_bs32_lr1e3_pat7_ep50/`: BRISC con VGG original
-  `[32, 64, 128]`, variando `batch_size` o `patience`.
-- `resultados_actualizados/paralelo/ova_digits_mlp32_16_bs64_lr1e3_pat10_ep50/` y
-  `resultados_actualizados/paralelo/ova_digits_mlp16_8_bs64_lr1e3_pat10_ep50/`: `digits` con MLP y
-  `batch_size=64`.
-- `resultados_actualizados/paralelo/ova_classic_mlp32_16_bs64_lr1e3_pat10_ep50/`: `iris`, `wine` y
-  `breast_cancer` con MLP `[32, 16]` y `batch_size=64`.
-
-La comparación temporal usa `parallel_train_time_seconds` para OVA y `train_time_seconds` para `multi-output`.
-Los resultados más relevantes hasta ahora son:
-
-| Dataset | Configuración OVA destacada | `balanced_accuracy` OVA | `f1_macro` OVA | Tiempo OVA paralelo | `balanced_accuracy` multi | `f1_macro` multi | Tiempo multi |
-|---|---|---:|---:|---:|---:|---:|---:|
-| TB Chest X-ray | VGG `[16, 32, 64]`, batch 32, patience 10 | 0.9689 | 0.9737 | 73.04 s | 0.9623 | 0.9698 | 106.38 s |
-| MNIST | VGG `[32, 64, 128]`, batch 128, patience 10 | 0.9937 | 0.9937 | 109.76 s | 0.9929 | 0.9930 | 112.84 s |
-| CIFAR-10 | VGG `[32, 64, 128]`, batch 128, patience 10 | 0.7669 | 0.7662 | 109.61 s | 0.7677 | 0.7663 | 128.00 s |
-| BRISC | VGG `[32, 64, 128]`, batch 32, patience 7 | 0.9291 | 0.9205 | 134.31 s | 0.9177 | 0.9054 | 135.96 s |
-| BRISC | VGG `[32, 64, 128]`, batch 32, patience 10 | 0.9379 | 0.9306 | 137.91 s | 0.9177 | 0.9054 | 135.96 s |
-| Digits | MLP `[32, 16]`, batch 64, patience 10 | 0.9799 | 0.9799 | 3.06 s | 0.9636 | 0.9635 | 3.02 s |
-
-Estos resultados apoyan una interpretación matizada. OVA no elimina su coste computacional: el coste secuencial
-acumulado sigue siendo mayor porque se entrena una red por clase. Sin embargo, cuando se estima el escenario
-paralelo por clase, el coste efectivo puede ser comparable o menor que el de `multi-output` en varios datasets,
-manteniendo equivalencia o mejora predictiva. Esto es claro en TB, MNIST, BRISC con `patience=7` y `digits`.
-CIFAR-10 queda como caso de rendimiento prácticamente equivalente con menor tiempo paralelo.
-
-En datasets pequeños como `iris`, `wine` y `breast_cancer`, el beneficio temporal es menos estable. El entrenamiento
-multi-output ya dura menos de unos pocos segundos, por lo que el overhead de lanzar varios clasificadores OVA pesa
-más. En esos casos OVA mejora métricas con `batch_size=32`, pero en la tanda con `batch_size=64` se observa una
-degradación del rendimiento en `iris` y `wine`. Esta comparación puede verse en
-`resultados_actualizados/paralelo/ova_parallel_actual/exp_iris_mlp_parallel_ova_summary.csv`,
-`resultados_actualizados/paralelo/ova_parallel_actual/exp_wine_mlp_parallel_ova_summary.csv`,
-`resultados_actualizados/paralelo/ova_classic_mlp32_16_bs64_lr1e3_pat10_ep50/exp_iris_mlp_parallel_ova_summary.csv`
-y
-`resultados_actualizados/paralelo/ova_classic_mlp32_16_bs64_lr1e3_pat10_ep50/exp_wine_mlp_parallel_ova_summary.csv`.
-Por tanto, estas tandas se interpretan como análisis de sensibilidad, no como configuraciones principales.
-
-La conclusión metodológica es que la hipótesis inicial de equivalencia predictiva se complementa con un análisis de
-eficiencia: si OVA alcanza rendimiento equivalente o superior, su coste adicional puede reducirse mediante
-paralelización, reducción arquitectónica o ajustes de entrenamiento. El efecto no es universal y depende del dataset,
-del número de clases, del tamaño del conjunto y de la dificultad del problema.
-
-## Datasets Locales
-
-BRISC debe estar descargado localmente con esta estructura:
+BRISC:
 
 ```text
 data/brisc2025/train/
 data/brisc2025/test/
 ```
 
-Cada partición debe contener las carpetas `glioma`, `meningioma`, `pituitary` y `no_tumor`.
-
-Tuberculosis debe estar en:
+Tuberculosis:
 
 ```text
 data/tb_chest_xray/
 ```
 
-con las carpetas `Normal` y `Tuberculosis`.
-
-MNIST y CIFAR-10 se descargan o leen desde `data/` durante la carga de datos.
-
-HAM10000 debe estar descargado localmente con esta estructura, tras descomprimir los zips de imágenes:
+HAM10000:
 
 ```text
 data/ham10000/
   HAM10000_metadata
   images/
-    ISIC_*.jpg
   raw/
-    HAM10000_images_part_1.zip
-    HAM10000_images_part_2.zip
-    HAM10000_metadata
-    HAM10000_segmentations_lesion_tschandl.zip
   masks/
-    HAM10000_segmentations_lesion_tschandl/
-      ISIC_*_segmentation.png
 ```
 
-Ejemplo rápido de clasificación con HAM10000:
+MNIST y CIFAR-10 se descargan o leen desde `data/` mediante `torchvision`.
 
-```bash
-python run_experiments.py \
-  --task classification \
-  --dataset ham10000 \
-  --model-arch vgg \
-  --image-size 128 \
-  --coupling-modes multi-output ova \
-  --ham10000-root data/ham10000 \
-  --output-csv resultados_actualizados/secuencial/exp_ham10000_vgg.csv \
-  --summary-csv resultados_actualizados/secuencial/exp_ham10000_vgg_summary.csv
-```
+## Documentación
 
-Para evaluar capacidad predictiva con el test independiente oficial de ISIC 2018 Task 3:
+- `docs/capacidades_codigo.md`: capacidades implementadas que no son necesariamente resultados finales.
+- `docs/experimentos_recientes.md`: resumen de eficiencia OVA, arquitecturas reducidas, BRISC y HAM10000.
+- `docs/protocolo_explicabilidad_actual.md`: protocolo final de explicabilidad en BRISC.
+- `docs/resumen_explicabilidad.md`: historial exploratorio de explicabilidad.
+- `docs/resumen_ham10000_decision_atajos.md`: decisión metodológica sobre HAM10000.
+- `docs/ham10000_atajos_por_artefacto_y_clase.md`: análisis de atajos visuales en HAM10000.
 
-```bash
-python run_experiments.py \
-  --task classification \
-  --dataset ham10000 \
-  --model-arch vgg \
-  --image-size 128 \
-  --batch-size 32 \
-  --coupling-modes multi-output ova \
-  --ham10000-root data/ham10000 \
-  --ham10000-test official \
-  --output-csv resultados_actualizados/secuencial/exp_ham10000_vgg_official.csv \
-  --summary-csv resultados_actualizados/secuencial/exp_ham10000_vgg_official_summary.csv \
-  --predictions-csv resultados_actualizados/secuencial/exp_ham10000_vgg_official_predictions.csv
-```
+## Nota de reproducibilidad
 
-El modo `--ham10000-test internal` usa un test interno por `lesion_id`, adecuado para explicabilidad espacial porque
-las máscaras disponibles corresponden a HAM10000. El modo `--ham10000-test official` usa HAM10000 solo para train/val
-y evalúa en el test independiente de ISIC 2018 Task 3.
-
-En modo interno, si no existe una partición fija, el cargador crea:
-
-```text
-data/ham10000/ham10000_train_test_split_seed2000.csv
-```
-
-Ese CSV asigna cada `lesion_id` completo a `train` o `test`, de modo que todas las imágenes de una misma lesión quedan
-siempre en el mismo subconjunto. Las siguientes ejecuciones reutilizan el CSV y mantienen el mismo test interno aunque
-se lancen varias semillas de entrenamiento. La validación se obtiene después dividiendo la parte `train` por
-`lesion_id`, siguiendo el esquema usado con datasets que ya traen train/test separados.
-
-El lanzador SLURM equivalente es:
-
-```bash
-sbatch scripts/run_tfm_ham10000_vgg_slurm.sh
-```
-
-Para lanzar la variante ponderada por desbalance:
-
-```bash
-CLASS_WEIGHTING=balanced WEIGHTING_TAG=balanced \
-sbatch --nodelist=atenea scripts/run_tfm_ham10000_vgg_slurm.sh
-```
-
-Para las pruebas con transferencia se puede usar VGG16 preentrenada en ImageNet y ajustar solo el bloque 5:
-
-```bash
-MODEL_ARCH=vgg16-pretrained PRETRAINED_FINETUNE=block5 IMAGE_SIZE=224 BATCH_SIZE=16 LEARNING_RATE=0.0001 \
-sbatch --nodelist=atenea scripts/run_tfm_ham10000_vgg_slurm.sh
-```
-
-En explicabilidad con HAM10000 se recomienda mantener `--ham10000-test internal`, porque ese test interno conserva
-máscaras de lesión para medir si Grad-CAM se concentra dentro de la lesión. Las configuraciones de referencia usadas
-para comparar rendimiento y mapas son:
-
-- VGG desde cero `[32, 64, 128]`.
-- VGG16 preentrenada con ajuste de `block5`, sin pesos de clase.
-- VGG16 preentrenada con ajuste de `block5`, con `CLASS_WEIGHTING=balanced`.
-
-El análisis Grad-CAM se lanza con `scripts/run_explicabilidad_gradcam_slurm.sh`; para mantener el hardware fijo:
-
-```bash
-DATASET=ham10000 MODEL_ARCH=vgg16-pretrained PRETRAINED_FINETUNE=block5 RUN_TAG=vgg16_block5 \
-SEEDS="1" NUM_IMAGES=14 SELECTION=balanced REQUIRE_MASK=1 IMAGE_SIZE=224 BATCH_SIZE=16 LEARNING_RATE=0.0001 \
-sbatch --nodelist=atenea scripts/run_explicabilidad_gradcam_slurm.sh
-```
-
-## Métricas
-
-En clasificación se guardan:
-
-- `accuracy`
-- `balanced_accuracy`
-- `precision_macro`
-- `recall_macro`
-- `f1_macro`
-- `tpr_macro`
-- `fpr_macro`
-- `tnr_macro`
-- `fnr_macro`
-- `train_time_seconds`
-
-Los resultados OVA agregados desde el flujo paralelo añaden:
-
-- `parallel_train_time_seconds`
-- `ova_model_train_time_seconds_mean`
-
-También se guardan variables asociadas al `early stopping`, como `best_val_loss`, `epochs_trained`, `total_epochs_trained` y `models_stopped_early`.
-
-Estas métricas permiten comparar no solo el porcentaje global de aciertos, sino también el comportamiento por clase y el coste computacional de entrenar una red multiclase frente a varias redes binarias.
-
-## Análisis Estadístico
-
-Los scripts auxiliares de `scripts/` incluyen análisis de potencia y pruebas estadísticas sobre las diferencias pareadas `OVA - multi-output`:
-
-- `analisis_potencia_wilcoxon.py`: estima por simulación Monte Carlo el número de semillas necesario para que Wilcoxon detecte una diferencia relevante.
-- `test_wilcoxon_pareado.py`: aplica el test pareado de Wilcoxon a uno o varios CSV.
-- `analisis_potencia_tost_bootstrap.py`: estima por simulación Monte Carlo el número de semillas necesario para declarar equivalencia práctica mediante IC bootstrap de la mediana.
-- `test_equivalencia_tost_bootstrap.py`: aplica el análisis de equivalencia TOST/bootstrap usando un margen práctico, por defecto `±0.02` en `f1_macro`.
-- `analisis_tiempos_paralelo_ova.py`: compara tiempos de `multi-output`, OVA secuencial y OVA paralelo ideal.
-- `analisis_arquitecturas_ova.py`: resume variantes reducidas de arquitectura OVA para clásicos MLP y datasets VGG.
-
-Wilcoxon evalúa evidencia de diferencia estadística. El análisis TOST/bootstrap evalúa equivalencia práctica dentro de un margen definido. Ambos enfoques se interpretan de forma complementaria.
-
-Varios scripts conservan rutas por defecto a CSV concretos de ejecuciones locales. Si se regeneran los
-experimentos, conviene pasar explícitamente los nuevos CSV cuando el script lo permita o actualizar esas rutas de
-trabajo antes de generar las tablas finales.
+El repositorio versiona código y documentación, no datasets ni resultados pesados. Varios scripts de análisis tienen rutas por defecto orientadas al entorno local usado durante el TFM. Si se regeneran experimentos en otra máquina, conviene pasar rutas explícitas por argumentos o variables de entorno y mantener la salida bajo `resultados_actualizados/`.

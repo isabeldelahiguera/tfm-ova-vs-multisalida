@@ -1,6 +1,6 @@
-# Capacidades adicionales del código
+# Capacidades del código
 
-Este documento recoge funcionalidades que el código soporta, aunque no formen parte del análisis principal ni de los resultados finales versionados en `resultados_10semillas/`.
+Este documento recoge funcionalidades que el código soporta, distinguiendo entre la línea principal del TFM y extensiones exploratorias. Los resultados experimentales se generan localmente en `resultados_actualizados/`, pero no se versionan en GitHub.
 
 El foco actual del TFM es la comparación en clasificación entre una red `multi-output` y la descomposición `OVA`. Lo descrito aquí debe entenderse como soporte exploratorio o extensiones posibles.
 
@@ -21,6 +21,8 @@ El argumento `--model-arch` soporta:
 
 - `mlp`: red fully connected configurable con `--hidden-layers`. Es la arquitectura por defecto.
 - `vgg`: CNN compacta inspirada en VGG. Solo se permite en clasificación con `mnist`, `cifar10`, `brisc` o `tb_chest_xray`.
+- `vgg16-pretrained`: VGG16 preentrenada en ImageNet para imágenes RGB, usada en pruebas dermatológicas de HAM10000.
+- `vit-b-16-pretrained`: ViT-B/16 preentrenada en ImageNet. Queda como soporte exploratorio, no como configuración final del TFM.
 
 En datasets de imagen, `mlp` y `vgg` tratan los datos de forma distinta:
 
@@ -34,7 +36,7 @@ Por ejemplo:
 - CIFAR-10 con `mlp`: `32x32x3 -> 3072`.
 - CIFAR-10 con `vgg`: `3x32x32`.
 
-## Datasets De Clasificación
+## Datasets de clasificación
 
 El código soporta estos datasets de clasificación:
 
@@ -62,7 +64,13 @@ Los resultados finales actuales solo usan:
 - `brisc`
 - `tb_chest_xray`
 
-Por tanto, `synthetic_multiclass`, `dermatology` y `heart_disease` quedan como soporte adicional del código, no como parte de la línea final de resultados.
+`ham10000` se usa como extensión dermatológica y análisis adicional, no como eje de la comparación final. `synthetic_multiclass`, `dermatology` y `heart_disease` quedan como soporte adicional del código.
+
+`dermatology` y `heart_disease` dependen de `ucimlrepo`. Esa dependencia no está en `requirements.txt` porque esos datasets no se usaron en los resultados principales; si se quieren ejecutar, instalarla aparte:
+
+```bash
+pip install ucimlrepo
+```
 
 ### HAM10000
 
@@ -78,7 +86,7 @@ El dataset descargado incluye:
 - `ISIC2018_Task3_Test_Images.zip` y `ISIC2018_Task3_Test_GroundTruth.csv`: test oficial independiente de clasificación
   de ISIC 2018 Task 3.
 
-El código soporta dos modos:
+El código soporta dos modos de test:
 
 - `--ham10000-test internal`: modo recomendado para las primeras pruebas y para explicabilidad, porque mantiene
   coherencia con las máscaras disponibles. Si no existe, crea un holdout fijo `train/test` por `lesion_id` en
@@ -94,16 +102,28 @@ misma lesión quedan en el mismo subconjunto y se evita fuga de información ent
 
 El lanzador SLURM para las pruebas VGG de HAM10000 es `scripts/run_tfm_ham10000_vgg_slurm.sh`. Además de la VGG propia
 desde cero, el código soporta `--model-arch vgg16-pretrained`, con pesos ImageNet y tres políticas de ajuste:
-`--pretrained-finetune frozen`, `block5` o `full`. Para HAM10000 también están disponibles `--class-weighting balanced`,
-`--data-augmentation ham10000-basic` y `--ova-calibration platt`; la calibración de OVA se considera análisis auxiliar,
-no la comparación principal.
+`--pretrained-finetune frozen`, `block5` o `full`. También existe soporte para `vit-b-16-pretrained`, aunque no se
+usa como configuración final.
+
+Para HAM10000 están disponibles:
+
+- `--class-weighting balanced`: pesos por clase en la pérdida.
+- `--train-sampler balanced`: muestreo balanceado en entrenamiento.
+- `--data-augmentation ham10000-basic`: aumentos sencillos de imagen.
+- `--ova-loss focal`: focal loss para clasificadores OVA.
+- `--ova-calibration platt|threshold|threshold-f1`: calibración o selección auxiliar de umbrales OVA.
+- `--ham10000-exclude-classes`: exclusión de clases concretas.
+- `--ham10000-label-mode malignant_binary`: formulación binaria maligno/no maligno.
+
+Estas opciones se añadieron para explorar el desbalance y posibles atajos visuales del dataset. No sustituyen la
+comparación principal multi-output frente a OVA.
 
 El análisis Grad-CAM de HAM10000 se lanza con `scripts/run_explicabilidad_gradcam_slurm.sh`. Usa las máscaras de
 `HAM10000_segmentations_lesion_tschandl` cuando se trabaja con `--ham10000-test internal`, por lo que permite comparar
 rendimiento predictivo y concentración espacial de la explicación sobre el mismo test interno. Para comparaciones de
 tiempo o explicabilidad se recomienda fijar `atenea` con `sbatch --nodelist=atenea`.
 
-## Datasets De Regresión
+## Datasets de regresión
 
 El modo `regression` soporta:
 
@@ -113,7 +133,7 @@ El modo `regression` soporta:
 
 Estos datasets no forman parte de los resultados finales actuales. Se mantienen porque permiten estudiar la versión de la pregunta del TFM en problemas con varias salidas continuas.
 
-## Datasets Sintéticos
+## Datasets sintéticos
 
 El código incluye dos generadores sintéticos:
 
@@ -128,7 +148,7 @@ Los parámetros principales son:
 - `--synthetic-targets`: número de salidas en regresión.
 - `--dependency-strength`: intensidad de una componente compartida entre salidas o clases.
 
-Estos datasets son útiles para pruebas controladas, pero no están incluidos en los resultados finales de `resultados_10semillas/`.
+Estos datasets son útiles para pruebas controladas, pero no están incluidos en los resultados finales del TFM.
 
 ## OVO
 
@@ -164,11 +184,17 @@ El parser admite, entre otros:
 - `--learning-rate`
 - `--class-weighting`: `none` o `balanced`. En clasificación multiclase usa pesos por clase en
   `CrossEntropyLoss`; en `OVA` usa `pos_weight` en cada pérdida binaria.
+- `--ova-loss`: `bce` o `focal`, para la pérdida de los clasificadores OVA.
+- `--focal-gamma` y `--focal-alpha`: parámetros de focal loss.
+- `--train-sampler`: `none` o `balanced`, para balancear el muestreo de entrenamiento.
+- `--pretrained-finetune`: `frozen`, `block5`, `last-block` o `full`, según arquitectura.
+- `--ova-calibration`: `none`, `platt`, `threshold` o `threshold-f1`, usado como análisis auxiliar de OVA.
 - `--seed`
 - `--seeds`
 - `--max-train`
 - `--max-test`
 - `--image-size`
+- `--predictions-csv`: guarda predicciones por muestra para análisis de errores y shortcuts.
 
 `--max-train` y `--max-test` son útiles para pruebas rápidas con datasets grandes.
 
@@ -181,5 +207,12 @@ Además de `run_experiments.py`, hay scripts auxiliares en `scripts/`:
 - `test_wilcoxon_pareado.py`: aplica el test pareado de Wilcoxon sobre una métrica concreta.
 - `analisis_potencia_tost_bootstrap.py`: estima por simulación Monte Carlo el número de semillas necesarias para declarar equivalencia mediante un IC bootstrap de la mediana dentro de un margen práctico.
 - `test_equivalencia_tost_bootstrap.py`: aplica el análisis de equivalencia TOST/bootstrap usando un IC bootstrap de la mediana de las diferencias pareadas.
+- `analisis_tiempos_paralelo_ova.py`: compara tiempo secuencial, tiempo OVA acumulado y tiempo OVA paralelo ideal.
+- `analisis_arquitecturas_ova.py`: resume pruebas con arquitecturas OVA reducidas.
+- `analisis_configuraciones_seleccionadas_estadistico.py`: contrasta configuraciones finales seleccionadas.
+- `figuras_tfm_configuraciones_seleccionadas.py` y `figuras_tfm_delta_sensibilidad_configuraciones.py`: generan figuras para la memoria.
+- `explicabilidad_gradcam_vgg.py`, `explicabilidad_lrp_vgg.py` y `oclusion_tumor_brisc.py`: auditoría de explicabilidad.
+- `analisis_dataset_brisc_train_test.py`, `resumir_shortcuts_brisc.py` y `analisis_errores_dataset_explicabilidad.py`: análisis de posibles shortcuts en BRISC.
+- `analisis_atajos_ham10000.py` y `analisis_atajos_ham10000_artifacts.py`: análisis exploratorio de atajos visuales en HAM10000.
 
 Los análisis de potencia se usan como referencia para valorar si el número de semillas es suficiente para detectar diferencias relevantes o declarar equivalencia práctica. Los tests finales se interpretan sobre las diferencias pareadas observadas en cada CSV.
