@@ -24,6 +24,10 @@ data/
 *.log
 *.out
 *.toc
+Memoria TFM/
+Memoria_tfm_plantilla__1_.zip
+caepia
+figuras_caepia/
 
 # Generated experiment outputs
 exp_*.csv
