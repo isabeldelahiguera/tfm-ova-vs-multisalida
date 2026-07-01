@@ -21,7 +21,7 @@ Sobre esa base se probaron extensiones de eficiencia:
 - análisis estadístico con Wilcoxon y TOST/bootstrap;
 - generación de figuras y tablas para la memoria.
 
-En la parte biomédica se añadió una auditoría de explicabilidad. Para BRISC se combinaron Grad-CAM/Grad-CAM++, LRP, oclusión tumoral y análisis de posibles shortcuts. La lectura final es prudente: OVA puede mejorar el rendimiento en BRISC, pero no muestra de forma sistemática una mejor localización tumoral. Para HAM10000 se dejaron implementadas pruebas dermatológicas adicionales con VGG16 preentrenada, balanceo, selección de clases y análisis de atajos visuales.
+En la parte biomédica se añadió una auditoría de explicabilidad. Para BRISC se combinaron Grad-CAM/Grad-CAM++, LRP, oclusión tumoral y análisis de posibles shortcuts. La lectura final es prudente: OVA puede mejorar el rendimiento en BRISC, pero no muestra de forma sistemática una mejor localización tumoral. Para HAM10000 se dejaron implementadas pruebas dermatológicas adicionales con VGG16 preentrenada, balanceo, selección de clases, análisis de atajos visuales y un análisis jerárquico complementario maligno/no maligno con tres clases malignas.
 
 ## Organización del código
 
@@ -144,6 +144,8 @@ El detalle metodológico está en `docs/protocolo_explicabilidad_actual.md`. El 
 ### HAM10000
 
 HAM10000 queda como extensión dermatológica. El código soporta split interno por `lesion_id`, test oficial de ISIC 2018 Task 3, VGG compacta, VGG16 preentrenada, balanceo por sampler, pesos de clase, focal loss para OVA, calibración auxiliar y modo binario maligno/no maligno.
+
+La versión final incluye además scripts para combinar probabilidades jerárquicas aproximadas en HAM10000 y generar paneles de mapas Grad-CAM++ comparando el modelo de siete clases, la etapa binaria y el clasificador de tres clases malignas.
 
 Documentos relacionados:
 

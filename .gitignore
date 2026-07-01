@@ -46,6 +46,8 @@ resultados_clasificacion/
 
 # Legacy/local files
 slurm_logs/
+slurm_*.err
+slurm_*.out
 resultados_slurm/
 README_old.md
 prueba.sh

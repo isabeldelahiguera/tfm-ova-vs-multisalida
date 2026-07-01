@@ -78,6 +78,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Color used for the CAM overlay in saved PNG panels.",
     )
     parser.add_argument(
+        "--panel-image-size",
+        type=int,
+        default=0,
+        help=(
+            "Optional visual size for each tile in saved PNG panels. "
+            "This does not change the model input size."
+        ),
+    )
+    parser.add_argument(
         "--target-layer",
         default="last",
         help=(
@@ -849,6 +858,20 @@ def add_header(image: Image.Image, header_lines: list[str], line_height: int = 1
     return canvas
 
 
+def resize_panel_image(image: Image.Image, size: int) -> Image.Image:
+    if size <= 0 or image.width == size and image.height == size:
+        return image
+    return image.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def resize_panel_mask(mask: np.ndarray | None, size: int) -> np.ndarray | None:
+    if mask is None or size <= 0 or mask.shape == (size, size):
+        return mask
+    mask_image = Image.fromarray(np.asarray(mask, dtype=np.uint8) * 255)
+    mask_image = mask_image.resize((size, size), Image.Resampling.NEAREST)
+    return np.asarray(mask_image) > 0
+
+
 def make_panel(
     original: Image.Image,
     multi: Image.Image,
@@ -861,7 +884,13 @@ def make_panel(
     mask: np.ndarray | None = None,
     cam_label: str = "Grad-CAM",
     heatmap_color_label: str = "Rojo",
+    panel_image_size: int = 0,
 ) -> Image.Image:
+    if panel_image_size > 0:
+        original = resize_panel_image(original, panel_image_size)
+        multi = resize_panel_image(multi, panel_image_size)
+        ova = resize_panel_image(ova, panel_image_size)
+        mask = resize_panel_mask(mask, panel_image_size)
     panels = [
         add_title(original, "Original"),
     ]
@@ -903,7 +932,13 @@ def make_all_ova_panel(
     mask: np.ndarray | None = None,
     cam_label: str = "Grad-CAM",
     heatmap_color_label: str = "Rojo",
+    panel_image_size: int = 0,
 ) -> Image.Image:
+    if panel_image_size > 0:
+        original = resize_panel_image(original, panel_image_size)
+        multi = resize_panel_image(multi, panel_image_size)
+        ova_overlays = [resize_panel_image(overlay, panel_image_size) for overlay in ova_overlays]
+        mask = resize_panel_mask(mask, panel_image_size)
     panels = [add_title(original, "Original")]
     if mask is not None:
         panels.append(add_title(overlay_mask(original, mask), "Mask real"))
@@ -1570,6 +1605,7 @@ def main() -> None:
                 mask=mask,
                 cam_label=cam_label,
                 heatmap_color_label=heatmap_color_label,
+                panel_image_size=parsed.panel_image_size,
             )
             panel.save(output_dir / filename)
         all_ova_filename = ""
@@ -1591,6 +1627,7 @@ def main() -> None:
                 mask=mask,
                 cam_label=cam_label,
                 heatmap_color_label=heatmap_color_label,
+                panel_image_size=parsed.panel_image_size,
             )
             all_ova_panel.save(output_dir / all_ova_filename)
 

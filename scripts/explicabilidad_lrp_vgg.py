@@ -62,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="resultados_actualizados/explicabilidad")
     parser.add_argument("--run-tag", default="")
     parser.add_argument("--checkpoint-dir", default="")
+    parser.add_argument("--checkpoint-run-tag", default="")
     parser.add_argument("--save-checkpoints", action="store_true")
     parser.add_argument("--reuse-checkpoints", action="store_true")
     parser.add_argument("--checkpoint-only", action="store_true")
@@ -292,6 +293,7 @@ def main() -> None:
                 ova_label=labels[ova_pred_class],
                 ova_confidence=float(ova_probs[idx, ova_pred_class]),
                 mask=mask,
+                cam_label="LRP",
             )
             panel.save(output_dir / filename)
 
