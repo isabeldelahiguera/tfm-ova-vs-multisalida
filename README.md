@@ -174,14 +174,12 @@ MNIST y CIFAR-10 se descargan o leen desde `data/` mediante `torchvision`.
 
 - `docs/capacidades_codigo.md`: capacidades implementadas no necesariamente usadas en los resultados finales.
 - `docs/protocolo_explicabilidad_actual.md`: protocolo final de explicabilidad.
-- `docs/resumen_ham10000_decision_atajos.md`: decisión metodológica sobre HAM10000.
-- `docs/ham10000_atajos_por_artefacto_y_clase.md`: análisis de artefactos en HAM10000.
 
 ## Nota sobre ejecución en clúster
 
 El repositorio no depende de un gestor de colas concreto. Los experimentos
 principales pueden ejecutarse mediante los scripts Python anteriores. En un
-entorno con ejecución por lotes, el entrenamiento OVA por clase puede
+entorno con batch execution, el entrenamiento OVA por clase puede
 distribuirse lanzando ejecuciones independientes de `run_parallel_ova.py` y
 agregando después los resultados; esta parte depende de la infraestructura
 disponible y no se incluye como requisito del repositorio.
