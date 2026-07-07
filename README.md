@@ -173,7 +173,6 @@ MNIST y CIFAR-10 se descargan o leen desde `data/` mediante `torchvision`.
 ## Documentación complementaria
 
 - `docs/capacidades_codigo.md`: capacidades implementadas no necesariamente usadas en los resultados finales.
-- `docs/protocolo_explicabilidad_actual.md`: protocolo final de explicabilidad.
 
 ## Nota sobre ejecución en clúster
 
