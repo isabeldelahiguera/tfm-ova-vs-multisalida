@@ -21,7 +21,6 @@ Los mapas Grad-CAM y Grad-CAM++ se calculan con la librería `pytorch-grad-cam`,
 Scripts principales:
 
 - `scripts/explicabilidad_gradcam_vgg.py`
-- `scripts/run_explicabilidad_gradcam_slurm.sh`
 - `scripts/analisis_gradcam_por_plano_clase.py`
 
 Se estudian:
@@ -40,7 +39,6 @@ LRP se calcula con `zennit`, usando el compuesto `EpsilonGammaBox`.
 Scripts principales:
 
 - `scripts/explicabilidad_lrp_vgg.py`
-- `scripts/run_explicabilidad_lrp_slurm.sh`
 
 LRP se usa como comprobación alternativa a Grad-CAM/Grad-CAM++. La motivación es evitar que la conclusión dependa de un único método de explicabilidad.
 
@@ -51,7 +49,6 @@ La oclusión es un experimento de perturbación diseñado para BRISC. Se tapa la
 Script principal:
 
 - `scripts/oclusion_tumor_brisc.py`
-- `scripts/run_oclusion_tumor_brisc_slurm.sh`
 
 La dilatación usa `skimage.morphology.binary_dilation` con `disk(radius)`. La región ocluida se rellena con la media local de un anillo alrededor de la lesión.
 
@@ -69,7 +66,6 @@ El análisis de dataset cuantifica regularidades de las imágenes de entrenamien
 Script principal:
 
 - `scripts/analisis_dataset_brisc_train_test.py`
-- `scripts/run_analisis_dataset_brisc_slurm.sh`
 - `scripts/resumir_shortcuts_brisc.py`
 
 Para morfología de máscaras se usa `skimage`:
@@ -241,7 +237,7 @@ Si una señal aparece en train pero no en test, es débil como explicación del 
 
 El paso final es cruzar las métricas de test con las predicciones por imagen y semilla.
 
-Para ello `run_tfm_brisc_vgg_slurm.sh` guarda un CSV opcional de predicciones por muestra:
+Para ello, el flujo predictivo guarda un CSV opcional de predicciones por muestra:
 
 - `seed`;
 - `test_index`;
@@ -425,52 +421,10 @@ La tesis prudente es:
 
 ## Comandos principales
 
-Grad-CAM:
-
-```bash
-DATASET=brisc SEEDS="1 2 3 4 5 6 7 8 9 10" \
-sbatch --nodelist=zeus scripts/run_explicabilidad_gradcam_slurm.sh
-```
-
-Grad-CAM++:
-
-```bash
-DATASET=brisc CAM_METHOD="gradcam++" SEEDS="1 2 3 4 5 6 7 8 9 10" \
-sbatch --nodelist=zeus scripts/run_explicabilidad_gradcam_slurm.sh
-```
-
-LRP:
-
-```bash
-DATASET=brisc SEEDS="1 2 3 4 5 6 7 8 9 10" \
-sbatch --nodelist=zeus scripts/run_explicabilidad_lrp_slurm.sh
-```
-
-Oclusión:
-
-```bash
-SEEDS="1 2 3 4 5 6 7 8 9 10" OCCLUSION_RADII="0 5 10 15" RING_RADIUS=15 \
-sbatch --nodelist=zeus scripts/run_oclusion_tumor_brisc_slurm.sh
-```
-
-Análisis de dataset solo test:
-
-```bash
-OUTPUT_DIR="resultados_actualizados/analisis_dataset/brisc_test" \
-SPLITS="test" \
-PERITUMOR_RADII="5 10 15" \
-sbatch scripts/run_analisis_dataset_brisc_slurm.sh
-```
-
-BRISC predictivo con predicciones por imagen:
-
-```bash
-RESULT_DIR="resultados_actualizados/secuencial_con_predicciones" \
-PREDICTIONS_CSV="resultados_actualizados/secuencial_con_predicciones/brisc_test_predictions_10seeds.csv" \
-SEEDS="1 2 3 4 5 6 7 8 9 10" \
-COUPLING_MODES="multi-output ova" \
-sbatch --nodelist=zeus scripts/run_tfm_brisc_vgg_slurm.sh
-```
+Los análisis se ejecutan mediante los scripts Python indicados anteriormente.
+En entornos con gestor de colas, cada llamada puede envolverse en el sistema de
+ejecución disponible, pero esa capa no forma parte del protocolo reproducible
+del repositorio.
 
 Cruce de predicciones con descriptores de test:
 

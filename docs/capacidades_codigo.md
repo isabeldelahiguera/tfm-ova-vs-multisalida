@@ -100,8 +100,8 @@ El código soporta dos modos de test:
 En ambos casos, las particiones derivadas de HAM10000 se hacen agrupando por `lesion_id`: todas las imágenes de una
 misma lesión quedan en el mismo subconjunto y se evita fuga de información entre train, validación y test.
 
-El lanzador SLURM para las pruebas VGG de HAM10000 es `scripts/run_tfm_ham10000_vgg_slurm.sh`. Además de la VGG propia
-desde cero, el código soporta `--model-arch vgg16-pretrained`, con pesos ImageNet y tres políticas de ajuste:
+Además de la VGG propia desde cero, el código soporta
+`--model-arch vgg16-pretrained`, con pesos ImageNet y tres políticas de ajuste:
 `--pretrained-finetune frozen`, `block5` o `full`. También existe soporte para `vit-b-16-pretrained`, aunque no se
 usa como configuración final.
 
@@ -118,10 +118,10 @@ Para HAM10000 están disponibles:
 Estas opciones se añadieron para explorar el desbalance y posibles atajos visuales del dataset. No sustituyen la
 comparación principal multi-output frente a OVA.
 
-El análisis Grad-CAM de HAM10000 se lanza con `scripts/run_explicabilidad_gradcam_slurm.sh`. Usa las máscaras de
-`HAM10000_segmentations_lesion_tschandl` cuando se trabaja con `--ham10000-test internal`, por lo que permite comparar
-rendimiento predictivo y concentración espacial de la explicación sobre el mismo test interno. Para comparaciones de
-tiempo o explicabilidad se recomienda fijar `atenea` con `sbatch --nodelist=atenea`.
+El análisis Grad-CAM de HAM10000 usa las máscaras de
+`HAM10000_segmentations_lesion_tschandl` cuando se trabaja con
+`--ham10000-test internal`, por lo que permite comparar rendimiento predictivo y
+concentración espacial de la explicación sobre el mismo test interno.
 
 ## Datasets de regresión
 

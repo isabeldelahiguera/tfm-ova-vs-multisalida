@@ -487,27 +487,12 @@ Por tanto, el valor del análisis no es demostrar que OVA localiza mejor, sino m
 
 ## Comandos Relevantes
 
-Grad-CAM++ con todas las métricas:
+Los análisis descritos en esta sección se ejecutan con los scripts Python de
+explicabilidad y resumen incluidos en `scripts/`. Los comandos concretos
+dependen de las rutas locales de datos, resultados y checkpoints, por lo que no
+se fijan aquí como parte del protocolo reproducible.
 
-```bash
-DATASET=brisc CAM_METHOD=gradcam++ CAM_TARGET=predicted SELECTION=all NUM_IMAGES=860 REQUIRE_MASK=1 INCLUDE_ALL_OVA_CAMS=1 INCLUDE_ALL_CLASS_METRICS=1 sbatch --nodelist=zeus scripts/run_explicabilidad_gradcam_slurm.sh
-```
-
-```bash
-DATASET=brisc CAM_METHOD=gradcam++ CAM_TARGET=true SELECTION=all NUM_IMAGES=860 REQUIRE_MASK=1 INCLUDE_ALL_OVA_CAMS=1 INCLUDE_ALL_CLASS_METRICS=1 sbatch --nodelist=zeus scripts/run_explicabilidad_gradcam_slurm.sh
-```
-
-Oclusión con radios:
-
-```bash
-OCCLUSION_RADII="0 5 10 15" RING_RADIUS=15 sbatch --nodelist=zeus scripts/run_oclusion_tumor_brisc_slurm.sh
-```
-
-Estudio de robustez por semilla y capa, sin guardar PNGs:
-
-```bash
-DATASET=brisc SEEDS="1 2 3" TARGET_LAYERS="last features.7 features.2" CAM_METHOD=gradcam++ CAM_TARGET=predicted SAVE_IMAGES=0 bash scripts/submit_gradcam_seed_layer_grid.sh
-```
+Estudio de robustez por semilla y capa:
 
 Las capas corresponden a:
 
@@ -532,17 +517,7 @@ Esto genera:
 
 RISE como método alternativo basado en perturbaciones aleatorias:
 
-```bash
-DATASET=brisc CAM_METHOD=rise CAM_TARGET=predicted SELECTION=all NUM_IMAGES=860 REQUIRE_MASK=1 SAVE_IMAGES=0 RISE_SAMPLES=200 RISE_MASK_SIZE=8 RISE_BATCH_SIZE=64 sbatch --nodelist=zeus scripts/run_explicabilidad_gradcam_slurm.sh
-```
-
 RISE no usa capa interna. La idea es generar muchas máscaras aleatorias, ocultar partes de la imagen y estimar qué zonas hacen bajar/subir la confianza. Es más caro que Grad-CAM, pero sirve como comprobación independiente porque no depende de la última capa convolucional.
-
-Para tres semillas:
-
-```bash
-for SEED in 1 2 3; do DATASET=brisc SEED=$SEED CAM_METHOD=rise CAM_TARGET=predicted SELECTION=all NUM_IMAGES=860 REQUIRE_MASK=1 SAVE_IMAGES=0 RISE_SAMPLES=200 RISE_MASK_SIZE=8 RISE_BATCH_SIZE=64 sbatch --nodelist=zeus scripts/run_explicabilidad_gradcam_slurm.sh; done
-```
 
 ### Resultados Con RISE
 

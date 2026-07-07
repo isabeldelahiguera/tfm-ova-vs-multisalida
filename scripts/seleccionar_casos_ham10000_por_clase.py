@@ -164,12 +164,19 @@ def main() -> None:
                 "selection_group": args.command_group,
                 "image_indices": indices,
                 "command": (
-                    "DATASET=ham10000 RUN_TAG=vgg16_block5_sampler_balanced_"
-                    f"class_{selection_class}_{args.command_group} "
-                    "MODEL_ARCH=vgg16-pretrained PRETRAINED_FINETUNE=block5 "
-                    "TRAIN_SAMPLER=balanced CLASS_WEIGHTING=none IMAGE_SIZE=224 BATCH_SIZE=16 "
-                    "CAM_METHOD=gradcam++ CAM_TARGET=predicted SELECTION=ordered REQUIRE_MASK=1 SAVE_IMAGES=1 "
-                    f"IMAGE_INDICES=\"{indices}\" sbatch scripts/run_explicabilidad_gradcam_slurm.sh"
+                    "python scripts/explicabilidad_gradcam_vgg.py "
+                    "--dataset ham10000 "
+                    "--model-arch vgg16-pretrained "
+                    "--pretrained-finetune block5 "
+                    "--train-sampler balanced "
+                    "--class-weighting none "
+                    "--image-size 224 "
+                    "--batch-size 16 "
+                    "--cam-method gradcam++ "
+                    "--cam-target predicted "
+                    "--selection ordered "
+                    "--require-mask "
+                    f"--image-indices {indices}"
                 ),
             }
         )
